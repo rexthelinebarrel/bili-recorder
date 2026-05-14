@@ -128,16 +128,39 @@ const BiliAPI = {
 
 // ─── Recorder ─────────────────────────────────────────────────────────────────
 
+function findFfmpegPath() {
+  // Search winget install location on Windows
+  if (process.platform !== 'win32') return null;
+  const base = process.env.LOCALAPPDATA || '';
+  const wingetDir = path.join(base, 'Microsoft', 'WinGet', 'Packages');
+  try {
+    for (const d of fs.readdirSync(wingetDir)) {
+      if (!d.startsWith('Gyan.FFmpeg')) continue;
+      const pkgDir = path.join(wingetDir, d);
+      for (const item of fs.readdirSync(pkgDir)) {
+        if (!item.startsWith('ffmpeg-')) continue;
+        const bin = path.join(pkgDir, item, 'bin', 'ffmpeg.exe');
+        if (fs.existsSync(bin)) return bin;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+let FFMPEG_BIN = findFfmpegPath() || 'ffmpeg';
+logger.info(`ffmpeg: ${FFMPEG_BIN}`);
+
 function getFfmpegArgs(streamUrl, filePath, format) {
+  const baseArgs = ['-i', streamUrl];
   switch (format) {
     case 'mkv':
-      return { ext: 'mkv', args: ['-i', streamUrl, '-c', 'copy', '-f', 'matroska', '-y', filePath] };
+      return { ext: 'mkv', args: [...baseArgs, '-c', 'copy', '-f', 'matroska', '-y', filePath] };
     case 'ts':
-      return { ext: 'ts', args: ['-i', streamUrl, '-c', 'copy', '-f', 'mpegts', '-y', filePath] };
+      return { ext: 'ts', args: [...baseArgs, '-c', 'copy', '-f', 'mpegts', '-y', filePath] };
     case 'mp4':
-      return { ext: 'mp4', args: ['-i', streamUrl, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-f', 'mp4', '-y', filePath] };
+      return { ext: 'mp4', args: [...baseArgs, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-f', 'mp4', '-y', filePath] };
     default: // flv
-      return { ext: 'flv', args: ['-i', streamUrl, '-c', 'copy', '-f', 'flv', '-y', filePath] };
+      return { ext: 'flv', args: [...baseArgs, '-c', 'copy', '-f', 'flv', '-y', filePath] };
   }
 }
 
@@ -168,41 +191,45 @@ const Recorder = {
     const { args } = getFfmpegArgs(streamUrl, filePath, fmt);
 
     return new Promise((resolve, reject) => {
-      const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
       let settled = false;
+      let startupError = null;
+      let exited = false;
 
       proc.on('error', (err) => {
-        logger.error(`[recorder] ffmpeg error for ${streamerName}: ${err.message}`);
-        delete this._processes[streamerId];
+        startupError = err;
+        logger.error(`[recorder] ffmpeg spawn error for ${streamerName}: ${err.message}`);
         if (!settled) { settled = true; reject(err); }
       });
 
-      // Register exit handler early to avoid race with setTimeout
       proc.on('exit', (code) => {
+        exited = true;
         if (this._processes[streamerId]) {
           logger.info(`[recorder] ffmpeg exited (code ${code}) for ${streamerName}`);
         }
         delete this._processes[streamerId];
+        if (!settled) {
+          settled = true;
+          reject(new Error(`ffmpeg exited with code ${code} during startup`));
+        }
       });
 
+      // Give ffmpeg 3 seconds to start.
       setTimeout(() => {
-        if (proc.exitCode !== null && proc.exitCode !== 0) {
-          logger.error(`[recorder] ffmpeg exited immediately (code ${proc.exitCode}) for ${streamerName}`);
-          delete this._processes[streamerId];
-          if (!settled) { settled = true; reject(new Error('ffmpeg exited immediately')); }
+        if (settled) return;
+        settled = true;
+        if (exited || startupError) {
+          reject(startupError || new Error('ffmpeg exited during startup'));
           return;
         }
-        if (!settled) {
-          this._processes[streamerId] = {
-            process: proc,
-            filePath,
-            startedAt: Date.now()
-          };
-          settled = true;
-          resolve(filePath);
-        }
-      }, 2000);
+        this._processes[streamerId] = {
+          process: proc,
+          filePath,
+          startedAt: Date.now()
+        };
+        resolve(filePath);
+      }, 3000);
     });
   },
 
@@ -521,6 +548,13 @@ const server = http.createServer(async (req, res) => {
 
 const PORT = process.env.PORT || 3456;
 server.listen(PORT, () => {
+  // Reset stale recording state from previous server run
+  for (const s of Store.getStreamers()) {
+    if (s.recording || s.status === 'live') {
+      Store.updateStreamer(s.id, { status: 'offline', recording: false });
+      logger.info(`[init] Reset ${s.name} to offline (server restart)`);
+    }
+  }
   logger.info(`Bili Recorder running at http://localhost:${PORT}`);
   Poller.start();
 });
