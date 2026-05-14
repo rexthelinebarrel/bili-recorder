@@ -4,6 +4,24 @@ const https = require('https');
 const { spawn } = require('child_process');
 const http = require('http');
 
+// ─── Logger ──────────────────────────────────────────────────────────────────
+const LOG_PATH = path.join(__dirname, 'app.log');
+
+function timestamp() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+const logger = {
+  _write(level, msg) {
+    const line = `[${timestamp()}] ${level} ${msg}`;
+    console.log(line);
+    try { fs.appendFileSync(LOG_PATH, line + '\n', 'utf-8'); } catch {}
+  },
+  info(msg) { this._write('INFO', msg); },
+  warn(msg) { this._write('WARN', msg); },
+  error(msg) { this._write('ERROR', msg); }
+};
+
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DEFAULT_CONFIG = {
   streamers: [],
@@ -138,15 +156,22 @@ const Recorder = {
       let settled = false;
 
       proc.on('error', (err) => {
+        logger.error(`[recorder] ffmpeg error for ${streamerName}: ${err.message}`);
         delete this._processes[streamerId];
         if (!settled) { settled = true; reject(err); }
       });
 
       // Register exit handler early to avoid race with setTimeout
-      proc.on('exit', () => { delete this._processes[streamerId]; });
+      proc.on('exit', (code) => {
+        if (this._processes[streamerId]) {
+          logger.info(`[recorder] ffmpeg exited (code ${code}) for ${streamerName}`);
+        }
+        delete this._processes[streamerId];
+      });
 
       setTimeout(() => {
         if (proc.exitCode !== null && proc.exitCode !== 0) {
+          logger.error(`[recorder] ffmpeg exited immediately (code ${proc.exitCode}) for ${streamerName}`);
           delete this._processes[streamerId];
           if (!settled) { settled = true; reject(new Error('ffmpeg exited immediately')); }
           return;
@@ -208,20 +233,24 @@ const Poller = {
 
         if (info.status === 'live' && prevStatus === 'offline') {
           // Just went live — start recording
+          logger.info(`[poller] ${s.name} (room ${s.roomId}) went LIVE`);
           s.status = 'live';
           s.name = info.name;
           Store.updateStreamer(s.id, { status: 'live', name: info.name, lastLiveTime: Date.now() });
           try {
-            await Recorder.start(s.id, s.roomId, s.name);
+            const filePath = await Recorder.start(s.id, s.roomId, s.name);
+            logger.info(`[recorder] Started recording ${s.name} -> ${filePath}`);
             Store.updateStreamer(s.id, { recording: true });
           } catch (e) {
-            console.error(`[recorder] Failed to start for ${s.name}:`, e.message);
+            logger.error(`[recorder] Failed to start for ${s.name}: ${e.message}`);
           }
         } else if (info.status === 'offline' && prevStatus === 'live') {
           // Just went offline
+          logger.info(`[poller] ${s.name} (room ${s.roomId}) went OFFLINE`);
           const wasRecording = Recorder.isRecording(s.id);
           if (wasRecording) {
-            Recorder.stop(s.id);
+            const stoppedFile = Recorder.stop(s.id);
+            if (stoppedFile) logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
           }
           Store.updateStreamer(s.id, { status: 'offline', recording: false });
         } else if (info.status === 'live' && prevStatus === 'live') {
@@ -230,18 +259,21 @@ const Poller = {
             const lastLive = s.lastLiveTime || 0;
             const gap = Date.now() - lastLive;
             if (gap <= RECONNECT_WINDOW) {
+              logger.warn(`[recorder] Reconnecting ${s.name} (gap: ${Math.round(gap/1000)}s)`);
               try {
                 await Recorder.start(s.id, s.roomId, s.name);
                 Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
               } catch (e) {
-                console.error(`[recorder] Reconnect failed for ${s.name}:`, e.message);
+                logger.warn(`[recorder] Reconnect failed for ${s.name}: ${e.message}`);
               }
+            } else {
+              logger.warn(`[recorder] ${s.name} recorder dead >2min, giving up`);
             }
           }
         }
 
       } catch (e) {
-        console.error(`[poller] Error checking room ${s.roomId}:`, e.message);
+        logger.warn(`[poller] Error checking room ${s.roomId}: ${e.message}`);
       }
     }
   },
@@ -385,6 +417,6 @@ const server = http.createServer(async (req, res) => {
 
 const PORT = process.env.PORT || 3456;
 server.listen(PORT, () => {
-  console.log(`Bili Recorder running at http://localhost:${PORT}`);
+  logger.info(`Bili Recorder running at http://localhost:${PORT}`);
   Poller.start();
 });
