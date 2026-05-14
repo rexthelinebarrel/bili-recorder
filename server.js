@@ -151,7 +151,8 @@ let FFMPEG_BIN = findFfmpegPath() || 'ffmpeg';
 logger.info(`ffmpeg: ${FFMPEG_BIN}`);
 
 function getFfmpegArgs(streamUrl, filePath, format) {
-  const baseArgs = ['-i', streamUrl];
+  const headers = 'Referer: https://live.bilibili.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n';
+  const baseArgs = ['-headers', headers, '-i', streamUrl];
   switch (format) {
     case 'mkv':
       return { ext: 'mkv', args: [...baseArgs, '-c', 'copy', '-f', 'matroska', '-y', filePath] };
@@ -193,6 +194,13 @@ const Recorder = {
     return new Promise((resolve, reject) => {
       const proc = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
+      // Log stderr to help debug ffmpeg failures
+      let stderrLog = '';
+      proc.stderr.on('data', (d) => {
+        stderrLog += d.toString();
+        if (stderrLog.length > 2000) stderrLog = stderrLog.slice(-1000);
+      });
+
       let settled = false;
       let startupError = null;
       let exited = false;
@@ -211,7 +219,8 @@ const Recorder = {
         delete this._processes[streamerId];
         if (!settled) {
           settled = true;
-          reject(new Error(`ffmpeg exited with code ${code} during startup`));
+          const detail = stderrLog ? ': ' + stderrLog.trim().split('\n').pop() : '';
+          reject(new Error(`ffmpeg exited with code ${code} during startup${detail}`));
         }
       });
 
