@@ -218,7 +218,7 @@ const Recorder = {
     const { args } = getFfmpegArgs(streamUrl, filePath, fmt, quality);
 
     return new Promise((resolve, reject) => {
-      const proc = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawn(FFMPEG_BIN, args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
       // Log stderr to help debug ffmpeg failures
       let stderrLog = '';
@@ -268,12 +268,20 @@ const Recorder = {
     });
   },
 
-  stop(streamerId) {
+  async stop(streamerId) {
     const entry = this._processes[streamerId];
     if (!entry) return null;
-    entry.process.kill('SIGTERM');
-    const filePath = entry.filePath;
+    const { process: proc, filePath } = entry;
     delete this._processes[streamerId];
+    // Write 'q' to stdin for graceful exit — ffmpeg finalizes MP4 moov atom
+    try { proc.stdin.write('q'); } catch {}
+    await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch {}
+        resolve();
+      }, 5000);
+      proc.on('exit', () => { clearTimeout(timeout); resolve(); });
+    });
     return filePath;
   },
 
@@ -351,7 +359,7 @@ const Poller = {
           logger.info(`[poller] ${s.name} (room ${s.roomId}) went OFFLINE`);
           const wasRecording = Recorder.isRecording(s.id);
           if (wasRecording) {
-            const stoppedFile = Recorder.stop(s.id);
+            const stoppedFile = await Recorder.stop(s.id);
             if (stoppedFile) logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
           }
           Store.updateStreamer(s.id, { status: 'offline', recording: false });
@@ -569,7 +577,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/stop') && req.method === 'POST') {
     const id = url.pathname.split('/')[3];
     if (Recorder.isRecording(id)) {
-      Recorder.stop(id);
+      await Recorder.stop(id);
       Store.updateStreamer(id, { recording: false });
       sendJSON(res, 200, { ok: true });
     } else {
@@ -615,7 +623,7 @@ const server = http.createServer(async (req, res) => {
     const deleteFiles = url.searchParams.get('deleteFiles') === 'true';
     const streamer = Store.getStreamers().find(s => s.id === id);
     const streamerName = streamer ? streamer.name : null;
-    if (Recorder.isRecording(id)) Recorder.stop(id);
+    if (Recorder.isRecording(id)) await Recorder.stop(id);
     Store.removeStreamer(id);
     if (deleteFiles && streamerName) {
       const savePath = Store.getSettings().savePath;
@@ -716,11 +724,10 @@ const server = http.createServer(async (req, res) => {
     sendJSON(res, 200, { ok: true });
     logger.info('Server shutting down by user request...');
     Poller.stop();
-    // Stop all active recordings gracefully
     for (const [sid] of Object.entries(Recorder._processes)) {
-      Recorder.stop(sid);
+      await Recorder.stop(sid);
     }
-    setTimeout(() => { process.exit(0); }, 500);
+    process.exit(0);
     return;
   }
 
