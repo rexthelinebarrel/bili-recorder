@@ -25,7 +25,7 @@ const logger = {
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DEFAULT_CONFIG = {
   streamers: [],
-  settings: { savePath: path.join(__dirname, 'recordings') }
+  settings: { savePath: path.join(__dirname, 'recordings'), format: 'flv' }
 };
 
 const Store = {
@@ -126,6 +126,23 @@ const BiliAPI = {
   }
 };
 
+// ─── Recorder ─────────────────────────────────────────────────────────────────
+
+function getFfmpegArgs(streamUrl, filePath, format) {
+  switch (format) {
+    case 'mkv':
+      return { ext: 'mkv', args: ['-i', streamUrl, '-c', 'copy', '-f', 'matroska', '-y', filePath] };
+    case 'ts':
+      return { ext: 'ts', args: ['-i', streamUrl, '-c', 'copy', '-f', 'mpegts', '-y', filePath] };
+    case 'mp4':
+      return { ext: 'mp4', args: ['-i', streamUrl, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-f', 'mp4', '-y', filePath] };
+    default: // flv
+      return { ext: 'flv', args: ['-i', streamUrl, '-c', 'copy', '-f', 'flv', '-y', filePath] };
+  }
+}
+
+const VIDEO_EXTS = new Set(['.flv', '.mkv', '.ts', '.mp4']);
+
 const Recorder = {
   _processes: {},
 
@@ -136,23 +153,22 @@ const Recorder = {
   async start(streamerId, roomId, streamerName) {
     if (this._processes[streamerId]) return;
 
+    const fmt = Store.getSettings().format || 'flv';
+    const { ext } = getFfmpegArgs('', '', fmt);
+
     const savePath = Store.getSettings().savePath;
     const dir = path.join(savePath, streamerName);
     this._ensureDir(dir);
 
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filePath = path.join(dir, `${ts}.flv`);
+    const filePath = path.join(dir, `${ts}.${ext}`);
 
     const streamUrl = await BiliAPI.getStreamUrl(roomId);
 
+    const { args } = getFfmpegArgs(streamUrl, filePath, fmt);
+
     return new Promise((resolve, reject) => {
-      const proc = spawn('ffmpeg', [
-        '-i', streamUrl,
-        '-c', 'copy',
-        '-f', 'flv',
-        '-y',
-        filePath
-      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
       let settled = false;
 
@@ -341,7 +357,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const files = fs.readdirSync(dir);
         for (const f of files) {
-          if (f.endsWith('.flv')) {
+          if (VIDEO_EXTS.has(path.extname(f).toLowerCase())) {
             const stat = fs.statSync(path.join(dir, f));
             recordings.push({ filename: s.name + '/' + f, streamerId: s.id, size: stat.size, mtime: stat.mtimeMs, filePath: path.join(dir, f) });
           }
