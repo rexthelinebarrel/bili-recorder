@@ -106,13 +106,14 @@ const BiliAPI = {
   },
 
   async getStreamUrl(roomId) {
-    const url = `https://api.live.bilibili.com/room/v1/Room/playUrl?room_id=${roomId}&platform=web&qn=10000`;
+    const url = `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${roomId}&protocol=0,1&format=0,1,2&codec=0&qn=10000&platform=web&ptype=8`;
     const res = await this._get(url);
     if (res.code !== 0) throw new Error(`BiliAPI error: ${res.message}`);
     const streams = res.data?.playurl_info?.playurl?.stream || [];
-    // Prefer the first available stream URL
+    // Prefer FLV (format_name=flv) with AVC codec for ffmpeg compatibility
     for (const stream of streams) {
       for (const format of (stream.format || [])) {
+        if (format.format_name !== 'flv') continue;
         for (const codec of (format.codec || [])) {
           const baseUrl = codec.base_url || '';
           const host = codec.url_info?.[0]?.host || '';
@@ -233,12 +234,13 @@ const Poller = {
 
         if (info.status === 'live' && prevStatus === 'offline') {
           // Just went live — start recording
-          logger.info(`[poller] ${s.name} (room ${s.roomId}) went LIVE`);
+          const realRoomId = info.roomId;
+          logger.info(`[poller] ${s.name} (room ${s.roomId} real ${realRoomId}) went LIVE`);
           s.status = 'live';
           s.name = info.name;
-          Store.updateStreamer(s.id, { status: 'live', name: info.name, lastLiveTime: Date.now() });
+          Store.updateStreamer(s.id, { status: 'live', name: info.name, lastLiveTime: Date.now(), realRoomId });
           try {
-            const filePath = await Recorder.start(s.id, s.roomId, s.name);
+            const filePath = await Recorder.start(s.id, realRoomId, s.name);
             logger.info(`[recorder] Started recording ${s.name} -> ${filePath}`);
             Store.updateStreamer(s.id, { recording: true });
           } catch (e) {
@@ -260,8 +262,9 @@ const Poller = {
             const gap = Date.now() - lastLive;
             if (gap <= RECONNECT_WINDOW) {
               logger.warn(`[recorder] Reconnecting ${s.name} (gap: ${Math.round(gap/1000)}s)`);
+              const realRoomId = s.realRoomId || info.roomId;
               try {
-                await Recorder.start(s.id, s.roomId, s.name);
+                await Recorder.start(s.id, realRoomId, s.name);
                 Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
               } catch (e) {
                 logger.warn(`[recorder] Reconnect failed for ${s.name}: ${e.message}`);
