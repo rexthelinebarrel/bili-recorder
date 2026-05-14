@@ -336,6 +336,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/stop') && req.method === 'POST') {
+    const id = url.pathname.split('/')[3];
+    if (Recorder.isRecording(id)) {
+      Recorder.stop(id);
+      Store.updateStreamer(id, { recording: false });
+      sendJSON(res, 200, { ok: true });
+    } else {
+      sendJSON(res, 400, { error: 'Not recording' });
+    }
+    return;
+  }
+
   if (url.pathname.startsWith('/api/streamer/') && req.method === 'DELETE') {
     const id = url.pathname.split('/').pop();
     if (Recorder.isRecording(id)) Recorder.stop(id);

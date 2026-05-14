@@ -194,7 +194,9 @@ async function refresh() {
 }
 
 async function stopRecord(id) {
-  showToast('停止请求已发送，下次检查时将停止');
+  await API.post('/api/streamer/'+id+'/stop');
+  showToast('录制已停止');
+  refresh();
 }
 
 async function removeStreamer(id) {
