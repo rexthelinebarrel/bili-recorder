@@ -195,7 +195,7 @@ async function refresh() {
           <span class="card-name">${s.name}</span>
           <span class="badge badge-live">直播中</span>
         </div>
-        <div class="card-meta">房间 ${s.roomId} · ${s.recording ? '<span style="color:var(--live)">● 录制中</span>' : '<span style="color:var(--warn)">○ 未在录制</span>'} <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
+        <div class="card-meta">房间 ${s.roomId} · ${s.recording ? '<span style="color:var(--live)">● 录制中</span>' : '<span style="color:var(--warn)">○ 未在录制</span>'} · 画质 <select onchange="changeQuality('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="auto"${(s.quality||'auto')==='auto'?' selected':''}>原画</option><option value="high"${s.quality==='high'?' selected':''}>高清</option><option value="medium"${s.quality==='medium'?' selected':''}>标清</option><option value="low"${s.quality==='low'?' selected':''}>流畅</option></select> <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
         ${s.recording ? '<div class="progress-line" style="width:100%"></div>' : ''}
         <div class="card-actions" style="margin-top:8px">
           ${s.recording
@@ -218,7 +218,7 @@ async function refresh() {
           <span class="card-name">${s.name}</span>
           <span class="badge badge-off">离线</span>
         </div>
-        <div class="card-meta">房间 ${s.roomId} <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
+        <div class="card-meta">房间 ${s.roomId} · 画质 <select onchange="changeQuality('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="auto"${(s.quality||'auto')==='auto'?' selected':''}>原画</option><option value="high"${s.quality==='high'?' selected':''}>高清</option><option value="medium"${s.quality==='medium'?' selected':''}>标清</option><option value="low"${s.quality==='low'?' selected':''}>流畅</option></select> <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
         <div class="card-actions" style="margin-top:4px">
           <button class="btn-sm danger" onclick="removeStreamer('${s.id}','${s.name.replace(/'/g,"\\'")}')">删除</button>
         </div>
@@ -296,6 +296,11 @@ async function deleteFile(filePath) {
   const r = await API.del('/api/recording?filePath=' + encodeURIComponent(filePath));
   if (r.ok) { showToast('已删除'); refresh(); }
   else showToast(r.error || '删除失败');
+}
+
+async function changeQuality(id, quality) {
+  await API.put('/api/streamer/'+id+'/quality', { quality });
+  showToast('画质已切换为 ' + {auto:'原画',high:'高清',medium:'标清',low:'流畅'}[quality]);
 }
 
 async function removeStreamer(id, name) {

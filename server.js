@@ -115,14 +115,17 @@ const BiliAPI = {
     };
   },
 
-  async getStreamUrl(roomId) {
-    const url = `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${roomId}&protocol=0,1&format=0,1,2&codec=0&qn=10000&platform=web&ptype=8`;
+  async getStreamUrl(roomId, quality) {
+    // Map quality to qn: auto=10000(原画), high=10000, medium=400(蓝光), low=250(超清)
+    const qnMap = { auto: 10000, high: 10000, medium: 400, low: 250 };
+    const qn = qnMap[quality] || 10000;
+    const url = `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${roomId}&protocol=0,1&format=0,1,2&codec=0&qn=${qn}&platform=web&ptype=8`;
     const res = await this._get(url);
     if (res.code !== 0) throw new Error(`BiliAPI error: ${res.message}`);
     const streams = res.data?.playurl_info?.playurl?.stream || [];
-    // Prefer FLV (format_name=flv) with AVC codec for ffmpeg compatibility
-    for (const stream of streams) {
-      for (const format of (stream.format || [])) {
+    // Iterate in reverse — last stream is highest quality
+    for (let i = streams.length - 1; i >= 0; i--) {
+      for (const format of (streams[i].format || [])) {
         if (format.format_name !== 'flv') continue;
         for (const codec of (format.codec || [])) {
           const baseUrl = codec.base_url || '';
@@ -160,7 +163,7 @@ function findFfmpegPath() {
 let FFMPEG_BIN = findFfmpegPath() || 'ffmpeg';
 logger.info(`ffmpeg: ${FFMPEG_BIN}`);
 
-function getFfmpegArgs(streamUrl, filePath, format) {
+function getFfmpegArgs(streamUrl, filePath, format, quality) {
   const headers = 'Referer: https://live.bilibili.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n';
   const baseArgs = ['-headers', headers, '-i', streamUrl];
   switch (format) {
@@ -168,8 +171,17 @@ function getFfmpegArgs(streamUrl, filePath, format) {
       return { ext: 'mkv', args: [...baseArgs, '-c', 'copy', '-f', 'matroska', '-y', filePath] };
     case 'ts':
       return { ext: 'ts', args: [...baseArgs, '-c', 'copy', '-f', 'mpegts', '-y', filePath] };
-    case 'mp4':
-      return { ext: 'mp4', args: [...baseArgs, '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-f', 'mp4', '-y', filePath] };
+    case 'mp4': {
+      // CRF lower = better quality; preset slower = better compression
+      const qMap = {
+        auto:  { crf: '18', preset: 'medium' },
+        high:  { crf: '20', preset: 'fast' },
+        medium:{ crf: '23', preset: 'fast' },
+        low:   { crf: '28', preset: 'ultrafast' }
+      };
+      const q = qMap[quality] || qMap.auto;
+      return { ext: 'mp4', args: [...baseArgs, '-c:v', 'libx264', '-preset', q.preset, '-crf', q.crf, '-c:a', 'aac', '-f', 'mp4', '-y', filePath] };
+    }
     default: // flv
       return { ext: 'flv', args: [...baseArgs, '-c', 'copy', '-f', 'flv', '-y', filePath] };
   }
@@ -187,8 +199,10 @@ const Recorder = {
   async start(streamerId, roomId, streamerName, reusePath) {
     if (this._processes[streamerId]) return;
 
+    const streamer = Store.getStreamers().find(s => s.id === streamerId);
+    const quality = (streamer && streamer.quality) || 'auto';
     const fmt = Store.getSettings().format || 'flv';
-    const { ext } = getFfmpegArgs('', '', fmt);
+    const { ext } = getFfmpegArgs('', '', fmt, quality);
 
     const savePath = Store.getSettings().savePath;
     const dir = path.join(savePath, streamerName);
@@ -199,9 +213,9 @@ const Recorder = {
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filePath = reusePath || path.join(dir, `${safeName}_${ts}.${ext}`);
 
-    const streamUrl = await BiliAPI.getStreamUrl(roomId);
+    const streamUrl = await BiliAPI.getStreamUrl(roomId, quality);
 
-    const { args } = getFfmpegArgs(streamUrl, filePath, fmt);
+    const { args } = getFfmpegArgs(streamUrl, filePath, fmt, quality);
 
     return new Promise((resolve, reject) => {
       const proc = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -502,7 +516,7 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, 409, { error: 'Streamer already added' });
       return;
     }
-    const s = { id: Date.now().toString(), roomId, name: roomId, status: 'offline', recording: false };
+    const s = { id: Date.now().toString(), roomId, name: roomId, status: 'offline', recording: false, quality: 'auto' };
     Store.addStreamer(s);
     // Fetch name immediately
     try {
@@ -560,6 +574,22 @@ const server = http.createServer(async (req, res) => {
     } else {
       sendJSON(res, 400, { error: 'Not recording' });
     }
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/quality') && req.method === 'PUT') {
+    const id = url.pathname.split('/')[3];
+    const body = await parseJSON(req);
+    const quality = body.quality;
+    if (!['auto', 'high', 'medium', 'low'].includes(quality)) {
+      sendJSON(res, 400, { error: 'Invalid quality. Use: auto, high, medium, low' });
+      return;
+    }
+    const s = Store.getStreamers().find(s => s.id === id);
+    if (!s) { sendJSON(res, 404, { error: 'Streamer not found' }); return; }
+    s.quality = quality;
+    Store.updateStreamer(id, { quality });
+    sendJSON(res, 200, { ok: true, quality });
     return;
   }
 
