@@ -59,6 +59,12 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 .settings-row input{flex:1;padding:10px 12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-family:var(--font-ui);outline:none}
 .settings-row input:focus{border-color:var(--text)}
 
+.card-recordings{margin-top:12px;border-top:1px solid var(--border);padding-top:10px}
+.card-rec-label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.rec-item{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:11px}
+.rec-item+.rec-item{border-top:1px solid var(--border)}
+.rec-name{font-weight:500;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rec-info{font-size:10px;color:var(--text3);margin-top:1px}
 .toast{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:8px 24px;font-size:12px;font-weight:500;z-index:100;animation:fadeIn .3s}
 @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 </style>
@@ -86,8 +92,8 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 <div class="section-label">离线</div>
 <div id="offlineArea"><div style="color:var(--text3);font-size:13px;padding:12px 0">暂无离线主播</div></div>
 
-<div class="section-label">录制文件</div>
-<div id="fileList"><div style="color:var(--text3);font-size:13px;padding:12px 0">暂无录制文件</div></div>
+<div class="section-label" id="orphanedLabel" style="display:none">未归类录像</div>
+<div id="orphanedList"></div>
 
 <div class="section-label">设置</div>
 <div class="settings-row">
@@ -146,6 +152,36 @@ async function refresh() {
   document.getElementById('savePathInput').value = settings.savePath || '';
   document.getElementById('formatSelect').value = settings.format || 'flv';
 
+  // Group recordings by streamerId
+  const recsByStreamer = {};
+  for (const r of data.recordings) {
+    if (!recsByStreamer[r.streamerId]) recsByStreamer[r.streamerId] = [];
+    recsByStreamer[r.streamerId].push(r);
+  }
+
+  function recsHTML(recs, streamerId) {
+    if (!recs || recs.length === 0) return '';
+    const id = 'recs-' + streamerId;
+    const latest = recs.slice(0, 10);
+    const items = latest.map(r => {
+      const fname = r.filename.split('/').pop();
+      const fp = r.filePath.replace(/\\/g,'\\\\');
+      return `<div class="rec-item">
+        <div style="flex:1;min-width:0">
+          <div class="rec-name" title="${fname}">${fname}</div>
+          <div class="rec-info">${new Date(r.mtime).toLocaleString('zh-CN')} · ${formatSize(r.size)}</div>
+        </div>
+        <button class="btn-sm" onclick="event.stopPropagation();playFile('${fp}')">▶</button>
+        ${r.filename.toLowerCase().endsWith('.flv') ? `<button class="btn-sm" onclick="event.stopPropagation();convertFile('${fp}')" style="margin-left:3px">→MKV</button>` : ''}
+        <button class="btn-sm danger" onclick="event.stopPropagation();deleteFile('${fp}')" style="margin-left:3px">✕</button>
+      </div>`;
+    }).join('');
+    return `<div class="card-recordings">
+      <div class="card-rec-label" id="label-${id}" onclick="var l=document.getElementById('${id}');var lb=document.getElementById('label-${id}');if(l.style.display==='none'){l.style.display='block';lb.textContent='▼ 录像文件 (${recs.length})'}else{l.style.display='none';lb.textContent='▶ 录像文件 (${recs.length})'}" style="cursor:pointer;user-select:none">▶ 录像文件 (${recs.length})</div>
+      <div id="${id}" style="display:none">${items}</div>
+    </div>`;
+  }
+
   const liveS = data.streamers.filter(s => s.status==='live');
   const offS = data.streamers.filter(s => s.status==='offline');
 
@@ -165,8 +201,9 @@ async function refresh() {
           ${s.recording
             ? '<button class="btn-sm danger" onclick="stopRecord(\''+s.id+'\')">⏹ 停止录制</button>'
             : '<button class="btn-sm" style="color:var(--live);border-color:var(--live)" onclick="startRecord(\''+s.id+'\')">▶ 开始录制</button>'}
-          <button class="btn-sm danger" onclick="removeStreamer('${s.id}')">删除主播</button>
+          <button class="btn-sm danger" onclick="removeStreamer(\'${s.id}\',\'${s.name.replace(/'/g,"\\'")}\')">删除主播</button>
         </div>
+        ${recsHTML(recsByStreamer[s.id], s.id)}
       </div>
     `).join('');
   }
@@ -183,28 +220,38 @@ async function refresh() {
         </div>
         <div class="card-meta">房间 ${s.roomId} <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
         <div class="card-actions" style="margin-top:4px">
-          <button class="btn-sm danger" onclick="removeStreamer('${s.id}')">删除</button>
+          <button class="btn-sm danger" onclick="removeStreamer('${s.id}','${s.name.replace(/'/g,"\\'")}')">删除</button>
         </div>
+        ${recsHTML(recsByStreamer[s.id], s.id)}
       </div>
     `).join('');
   }
 
-  const fileList = document.getElementById('fileList');
-  if (data.recordings.length===0) {
-    fileList.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:12px 0">暂无录制文件</div>';
-  } else {
-    fileList.innerHTML = data.recordings.slice(0, 20).map(r => `
-      <div class="file-item">
+  // Orphaned recordings (files from deleted streamers)
+  const orphanedLabel = document.getElementById('orphanedLabel');
+  const orphanedList = document.getElementById('orphanedList');
+  if (data.orphaned && data.orphaned.length > 0) {
+    orphanedLabel.style.display = '';
+    const oItems = data.orphaned.slice(0, 20).map(r => {
+      const fname = r.filename.split('/').pop();
+      const fp = r.filePath.replace(/\\/g,'\\\\');
+      return `<div class="rec-item">
         <div style="flex:1;min-width:0">
-          <div class="file-name">${r.filename}</div>
-          <div class="file-meta">${new Date(r.mtime).toLocaleString('zh-CN')}</div>
+          <div class="rec-name" title="${r.filename}">${r.filename}</div>
+          <div class="rec-info">${new Date(r.mtime).toLocaleString('zh-CN')} · ${formatSize(r.size)}</div>
         </div>
-        <span class="file-size" style="margin-right:8px">${formatSize(r.size)}</span>
-        <button class="btn-sm" onclick="playFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="用系统播放器打开">▶</button>
-        ${r.filename.toLowerCase().endsWith('.flv') ? `<button class="btn-sm" onclick="convertFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="无损转为MKV" style="margin-left:4px">→MKV</button>` : ''}
-        <button class="btn-sm danger" onclick="deleteFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="删除文件" style="margin-left:4px">✕</button>
-      </div>
-    `).join('');
+        <button class="btn-sm" onclick="playFile('${fp}')">▶</button>
+        ${r.filename.toLowerCase().endsWith('.flv') ? `<button class="btn-sm" onclick="convertFile('${fp}')" style="margin-left:3px">→MKV</button>` : ''}
+        <button class="btn-sm danger" onclick="deleteFile('${fp}')" style="margin-left:3px">✕</button>
+      </div>`;
+    }).join('');
+    orphanedList.innerHTML = `<div id="orphanedBlock" style="display:block">
+      <div class="card-rec-label" style="cursor:default">${data.orphaned.length} 个文件</div>
+      ${oItems}
+    </div>`;
+  } else {
+    orphanedLabel.style.display = 'none';
+    orphanedList.innerHTML = '';
   }
 
   document.getElementById('clock').textContent = '更新于 '+new Date().toLocaleTimeString('zh-CN');
@@ -251,9 +298,12 @@ async function deleteFile(filePath) {
   else showToast(r.error || '删除失败');
 }
 
-async function removeStreamer(id) {
-  await API.del('/api/streamer/'+id);
-  showToast('已删除');
+async function removeStreamer(id, name) {
+  if (!confirm('确定删除主播「' + name + '」？')) return;
+  const deleteFiles = confirm('是否同时删除「' + name + '」的所有录制视频文件？\n\n「确定」— 删除主播和所有视频\n「取消」— 仅删除主播，保留视频文件');
+  const url = '/api/streamer/' + id + (deleteFiles ? '?deleteFiles=true' : '');
+  await API.del(url);
+  showToast(deleteFiles ? '已删除主播和视频文件' : '已删除主播，视频文件已保留');
   refresh();
 }
 

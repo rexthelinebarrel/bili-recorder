@@ -2,3 +2,4 @@ node_modules/
 recordings/
 .superpowers/
 *.log
+config.json

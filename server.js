@@ -97,9 +97,19 @@ const BiliAPI = {
     const url = `https://api.live.bilibili.com/room/v1/Room/get_info?room_id=${roomId}`;
     const res = await this._get(url);
     if (res.code !== 0) throw new Error(`BiliAPI error: ${res.message}`);
+    let name = res.data.title || String(roomId);
+    const uid = res.data.uid;
+    if (uid) {
+      try {
+        const userRes = await this._get(`https://api.live.bilibili.com/live_user/v1/Master/info?uid=${uid}`);
+        if (userRes.code === 0 && userRes.data?.info?.uname) {
+          name = userRes.data.info.uname;
+        }
+      } catch {}
+    }
     return {
       roomId: String(res.data.room_id),
-      name: res.data.anchor_info?.base_info?.uname || `房间${roomId}`,
+      name,
       status: res.data.live_status === 1 ? 'live' : 'offline',
       title: res.data.title || ''
     };
@@ -185,7 +195,9 @@ const Recorder = {
     this._ensureDir(dir);
 
     // Reuse existing file path if reconnecting, otherwise create new timestamped file
-    const filePath = reusePath || path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`);
+    const safeName = streamerName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').slice(0, 30);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filePath = reusePath || path.join(dir, `${safeName}_${ts}.${ext}`);
 
     const streamUrl = await BiliAPI.getStreamUrl(roomId);
 
@@ -283,6 +295,28 @@ const Poller = {
       try {
         const info = await BiliAPI.getRoomInfo(s.roomId);
         const prevStatus = s.status;
+
+        // Update name if changed — migrate recordings from old directory
+        if (info.name !== s.name) {
+          const savePath = Store.getSettings().savePath;
+          const oldDir = path.join(savePath, s.name);
+          const newDir = path.join(savePath, info.name);
+          try {
+            if (fs.existsSync(oldDir) && fs.statSync(oldDir).isDirectory()) {
+              fs.mkdirSync(newDir, { recursive: true });
+              const files = fs.readdirSync(oldDir);
+              for (const f of files) {
+                fs.renameSync(path.join(oldDir, f), path.join(newDir, f));
+              }
+              fs.rmdirSync(oldDir);
+              logger.info(`[poller] Migrated recordings: ${s.name} -> ${info.name} (${files.length} files)`);
+            }
+          } catch (e) {
+            logger.warn(`[poller] Failed to migrate recordings for ${s.name}: ${e.message}`);
+          }
+          s.name = info.name;
+          Store.updateStreamer(s.id, { name: info.name });
+        }
 
         if (info.status === 'live' && prevStatus === 'offline') {
           // Just went live — start recording
@@ -387,7 +421,9 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/status' && req.method === 'GET') {
     const streamers = Store.getStreamers();
     const recordings = [];
+    const orphaned = [];
     const savePath = Store.getSettings().savePath;
+    const streamerNames = new Set(streamers.map(s => s.name));
     for (const s of streamers) {
       const dir = path.join(savePath, s.name);
       try {
@@ -400,8 +436,25 @@ const server = http.createServer(async (req, res) => {
         }
       } catch {}
     }
+    // Orphaned: files in directories that don't match any streamer
+    try {
+      const entries = fs.readdirSync(savePath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (streamerNames.has(entry.name)) continue;
+        const dir = path.join(savePath, entry.name);
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          if (VIDEO_EXTS.has(path.extname(f).toLowerCase())) {
+            const stat = fs.statSync(path.join(dir, f));
+            orphaned.push({ filename: entry.name + '/' + f, size: stat.size, mtime: stat.mtimeMs, filePath: path.join(dir, f) });
+          }
+        }
+      }
+    } catch {}
     recordings.sort((a, b) => b.mtime - a.mtime);
-    sendJSON(res, 200, { streamers, recordings });
+    orphaned.sort((a, b) => b.mtime - a.mtime);
+    sendJSON(res, 200, { streamers, recordings, orphaned });
     return;
   }
 
@@ -454,6 +507,24 @@ const server = http.createServer(async (req, res) => {
     // Fetch name immediately
     try {
       const info = await BiliAPI.getRoomInfo(roomId);
+      // Merge any recordings left in old directory names
+      const savePath = Store.getSettings().savePath;
+      for (const oldName of [roomId, '房间' + roomId]) {
+        if (oldName === info.name) continue;
+        const oldDir = path.join(savePath, oldName);
+        const newDir = path.join(savePath, info.name);
+        try {
+          if (fs.existsSync(oldDir) && fs.statSync(oldDir).isDirectory()) {
+            fs.mkdirSync(newDir, { recursive: true });
+            const files = fs.readdirSync(oldDir);
+            for (const f of files) {
+              fs.renameSync(path.join(oldDir, f), path.join(newDir, f));
+            }
+            fs.rmdirSync(oldDir);
+            logger.info(`[add] Merged orphaned dir ${oldName} -> ${info.name} (${files.length} files)`);
+          }
+        } catch {}
+      }
       s.name = info.name;
       Store.updateStreamer(s.id, { name: info.name });
     } catch {}
@@ -494,8 +565,21 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname.startsWith('/api/streamer/') && req.method === 'DELETE') {
     const id = url.pathname.split('/').pop();
+    const deleteFiles = url.searchParams.get('deleteFiles') === 'true';
+    const streamer = Store.getStreamers().find(s => s.id === id);
+    const streamerName = streamer ? streamer.name : null;
     if (Recorder.isRecording(id)) Recorder.stop(id);
     Store.removeStreamer(id);
+    if (deleteFiles && streamerName) {
+      const savePath = Store.getSettings().savePath;
+      const dir = path.join(savePath, streamerName);
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        logger.info(`[streamer] Deleted recording dir for ${streamerName}: ${dir}`);
+      } catch (e) {
+        logger.warn(`[streamer] Failed to delete dir for ${streamerName}: ${e.message}`);
+      }
+    }
     sendJSON(res, 200, { ok: true });
     return;
   }
@@ -585,6 +669,39 @@ const server = http.createServer(async (req, res) => {
   res.end('Not Found');
 });
 
+function migrateOrphanedDirs() {
+  const savePath = Store.getSettings().savePath;
+  const streamers = Store.getStreamers();
+  try {
+    const entries = fs.readdirSync(savePath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dirName = entry.name;
+      // Find a streamer whose roomId or old fallback patterns match this directory
+      for (const s of streamers) {
+        if (dirName === s.name) break; // already correct
+        // Check if dirName is the room ID or "房间<roomId>" fallback
+        if (dirName === s.roomId || dirName === '房间' + s.roomId) {
+          const oldDir = path.join(savePath, dirName);
+          const newDir = path.join(savePath, s.name);
+          try {
+            fs.mkdirSync(newDir, { recursive: true });
+            const files = fs.readdirSync(oldDir);
+            for (const f of files) {
+              fs.renameSync(path.join(oldDir, f), path.join(newDir, f));
+            }
+            fs.rmdirSync(oldDir);
+            logger.info(`[migrate] Merged orphaned dir ${dirName} -> ${s.name} (${files.length} files)`);
+          } catch (e) {
+            logger.warn(`[migrate] Failed to merge ${dirName}: ${e.message}`);
+          }
+          break;
+        }
+      }
+    }
+  } catch {}
+}
+
 const PORT = process.env.PORT || 3456;
 server.listen(PORT, () => {
   // Reset stale recording state from previous server run
@@ -594,6 +711,7 @@ server.listen(PORT, () => {
       logger.info(`[init] Reset ${s.name} to offline (server restart)`);
     }
   }
+  migrateOrphanedDirs();
   logger.info(`Bili Recorder running at http://localhost:${PORT}`);
   Poller.start();
 });
