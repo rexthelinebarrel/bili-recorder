@@ -135,26 +135,31 @@ const Recorder = {
         filePath
       ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-      proc.stderr.on('data', (d) => {});
+      let settled = false;
 
       proc.on('error', (err) => {
         delete this._processes[streamerId];
-        reject(err);
+        if (!settled) { settled = true; reject(err); }
       });
+
+      // Register exit handler early to avoid race with setTimeout
+      proc.on('exit', () => { delete this._processes[streamerId]; });
 
       setTimeout(() => {
         if (proc.exitCode !== null && proc.exitCode !== 0) {
           delete this._processes[streamerId];
-          reject(new Error('ffmpeg exited immediately'));
+          if (!settled) { settled = true; reject(new Error('ffmpeg exited immediately')); }
           return;
         }
-        this._processes[streamerId] = {
-          process: proc,
-          filePath,
-          startedAt: Date.now()
-        };
-        proc.on('exit', () => { delete this._processes[streamerId]; });
-        resolve(filePath);
+        if (!settled) {
+          this._processes[streamerId] = {
+            process: proc,
+            filePath,
+            startedAt: Date.now()
+          };
+          settled = true;
+          resolve(filePath);
+        }
       }, 2000);
     });
   },
