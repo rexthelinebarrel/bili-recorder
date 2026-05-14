@@ -343,7 +343,7 @@ const server = http.createServer(async (req, res) => {
         for (const f of files) {
           if (f.endsWith('.flv')) {
             const stat = fs.statSync(path.join(dir, f));
-            recordings.push({ filename: s.name + '/' + f, streamerId: s.id, size: stat.size, mtime: stat.mtimeMs });
+            recordings.push({ filename: s.name + '/' + f, streamerId: s.id, size: stat.size, mtime: stat.mtimeMs, filePath: path.join(dir, f) });
           }
         }
       } catch {}
@@ -411,6 +411,39 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/check' && req.method === 'POST') {
     Poller.check();
     sendJSON(res, 200, { ok: true });
+    return;
+  }
+
+  if (url.pathname === '/api/open-file' && req.method === 'POST') {
+    const body = await parseJSON(req);
+    const filePath = body.filePath;
+    if (!filePath) { sendJSON(res, 400, { error: 'Missing filePath' }); return; }
+    try {
+      const { execFile } = require('child_process');
+      if (process.platform === 'win32') {
+        execFile('cmd', ['/c', 'start', '', filePath]);
+      } else if (process.platform === 'darwin') {
+        execFile('open', [filePath]);
+      } else {
+        execFile('xdg-open', [filePath]);
+      }
+      sendJSON(res, 200, { ok: true });
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/recording' && req.method === 'DELETE') {
+    const filePath = url.searchParams.get('filePath');
+    if (!filePath) { sendJSON(res, 400, { error: 'Missing filePath' }); return; }
+    try {
+      fs.unlinkSync(filePath);
+      logger.info(`[recording] Deleted: ${filePath}`);
+      sendJSON(res, 200, { ok: true });
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
     return;
   }
 

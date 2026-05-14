@@ -103,7 +103,7 @@ const API = {
     const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     return r.json();
   },
-  async del(path) { await fetch(path, { method:'DELETE' }); },
+  async del(path) { const r = await fetch(path, { method:'DELETE' }); return r.json(); },
   async put(path, body) {
     const r = await fetch(path, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     return r.json();
@@ -181,11 +181,13 @@ async function refresh() {
   } else {
     fileList.innerHTML = data.recordings.slice(0, 20).map(r => `
       <div class="file-item">
-        <div>
+        <div style="flex:1;min-width:0">
           <div class="file-name">${r.filename}</div>
           <div class="file-meta">${new Date(r.mtime).toLocaleString('zh-CN')}</div>
         </div>
-        <span class="file-size">${formatSize(r.size)}</span>
+        <span class="file-size" style="margin-right:8px">${formatSize(r.size)}</span>
+        <button class="btn-sm" onclick="playFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="用系统播放器打开">▶</button>
+        <button class="btn-sm danger" onclick="deleteFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="删除文件" style="margin-left:4px">✕</button>
       </div>
     `).join('');
   }
@@ -197,6 +199,19 @@ async function stopRecord(id) {
   await API.post('/api/streamer/'+id+'/stop');
   showToast('录制已停止');
   refresh();
+}
+
+async function playFile(filePath) {
+  const r = await API.post('/api/open-file', { filePath });
+  if (r.ok) showToast('已打开播放器');
+  else showToast(r.error || '打开失败');
+}
+
+async function deleteFile(filePath) {
+  if (!confirm('确定删除此录制文件？')) return;
+  const r = await API.del('/api/recording?filePath=' + encodeURIComponent(filePath));
+  if (r.ok) { showToast('已删除'); refresh(); }
+  else showToast(r.error || '删除失败');
 }
 
 async function removeStreamer(id) {
