@@ -392,6 +392,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/start') && req.method === 'POST') {
+    const id = url.pathname.split('/')[3];
+    if (Recorder.isRecording(id)) {
+      sendJSON(res, 400, { error: 'Already recording' });
+      return;
+    }
+    const s = Store.getStreamers().find(s => s.id === id);
+    if (!s) { sendJSON(res, 404, { error: 'Streamer not found' }); return; }
+    const realRoomId = s.realRoomId || s.roomId;
+    try {
+      await Recorder.start(id, realRoomId, s.name);
+      Store.updateStreamer(id, { recording: true, lastLiveTime: Date.now() });
+      sendJSON(res, 200, { ok: true });
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
+    return;
+  }
+
   if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/stop') && req.method === 'POST') {
     const id = url.pathname.split('/')[3];
     if (Recorder.isRecording(id)) {

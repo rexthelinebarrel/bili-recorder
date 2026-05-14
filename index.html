@@ -159,11 +159,13 @@ async function refresh() {
           <span class="card-name">${s.name}</span>
           <span class="badge badge-live">直播中</span>
         </div>
-        <div class="card-meta">房间 ${s.roomId} · ${s.recording?'录制中':'检测中...'} <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
+        <div class="card-meta">房间 ${s.roomId} · ${s.recording ? '<span style="color:var(--live)">● 录制中</span>' : '<span style="color:var(--warn)">○ 未在录制</span>'} <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
         ${s.recording ? '<div class="progress-line" style="width:100%"></div>' : ''}
         <div class="card-actions" style="margin-top:8px">
-          ${s.recording ? '<button class="btn-sm danger" onclick="stopRecord(\''+s.id+'\')">停止录制</button>' : ''}
-          <button class="btn-sm danger" onclick="removeStreamer('${s.id}')" style="${s.recording ? '' : 'margin-left:0'}">删除主播</button>
+          ${s.recording
+            ? '<button class="btn-sm danger" onclick="stopRecord(\''+s.id+'\')">⏹ 停止录制</button>'
+            : '<button class="btn-sm" style="color:var(--live);border-color:var(--live)" onclick="startRecord(\''+s.id+'\')">▶ 开始录制</button>'}
+          <button class="btn-sm danger" onclick="removeStreamer('${s.id}')">删除主播</button>
         </div>
       </div>
     `).join('');
@@ -205,6 +207,12 @@ async function refresh() {
   }
 
   document.getElementById('clock').textContent = '更新于 '+new Date().toLocaleTimeString('zh-CN');
+}
+
+async function startRecord(id) {
+  const r = await API.post('/api/streamer/'+id+'/start');
+  if (r.ok) { showToast('录制已开始'); refresh(); }
+  else showToast(r.error || '启动失败');
 }
 
 async function stopRecord(id) {
