@@ -1,0 +1,10 @@
+{
+  "name": "bili-recorder",
+  "version": "1.0.0",
+  "description": "B站直播自动录制助手",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}
