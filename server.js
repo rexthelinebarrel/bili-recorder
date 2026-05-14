@@ -173,7 +173,7 @@ const Recorder = {
     fs.mkdirSync(dir, { recursive: true });
   },
 
-  async start(streamerId, roomId, streamerName) {
+  async start(streamerId, roomId, streamerName, reusePath) {
     if (this._processes[streamerId]) return;
 
     const fmt = Store.getSettings().format || 'flv';
@@ -183,8 +183,8 @@ const Recorder = {
     const dir = path.join(savePath, streamerName);
     this._ensureDir(dir);
 
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filePath = path.join(dir, `${ts}.${ext}`);
+    // Reuse existing file path if reconnecting, otherwise create new timestamped file
+    const filePath = reusePath || path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`);
 
     const streamUrl = await BiliAPI.getStreamUrl(roomId);
 
@@ -285,7 +285,7 @@ const Poller = {
           try {
             const filePath = await Recorder.start(s.id, realRoomId, s.name);
             logger.info(`[recorder] Started recording ${s.name} -> ${filePath}`);
-            Store.updateStreamer(s.id, { recording: true });
+            Store.updateStreamer(s.id, { recording: true, lastFilePath: filePath });
           } catch (e) {
             logger.error(`[recorder] Failed to start for ${s.name}: ${e.message}`);
           }
@@ -304,10 +304,10 @@ const Poller = {
             const lastLive = s.lastLiveTime || 0;
             const gap = Date.now() - lastLive;
             if (gap <= RECONNECT_WINDOW) {
-              logger.warn(`[recorder] Reconnecting ${s.name} (gap: ${Math.round(gap/1000)}s)`);
+              logger.warn(`[recorder] Reconnecting ${s.name} (gap: ${Math.round(gap/1000)}s, reusing file)`);
               const realRoomId = s.realRoomId || info.roomId;
               try {
-                await Recorder.start(s.id, realRoomId, s.name);
+                await Recorder.start(s.id, realRoomId, s.name, s.lastFilePath);
                 Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
               } catch (e) {
                 logger.warn(`[recorder] Reconnect failed for ${s.name}: ${e.message}`);
@@ -532,6 +532,13 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/recording' && req.method === 'DELETE') {
     const filePath = url.searchParams.get('filePath');
     if (!filePath) { sendJSON(res, 400, { error: 'Missing filePath' }); return; }
+    // Check if any active recorder is writing to this file
+    for (const [sid, entry] of Object.entries(Recorder._processes)) {
+      if (entry.filePath === filePath) {
+        sendJSON(res, 409, { error: '文件正在录制中，请先停止录制再删除' });
+        return;
+      }
+    }
     try {
       fs.unlinkSync(filePath);
       logger.info(`[recording] Deleted: ${filePath}`);

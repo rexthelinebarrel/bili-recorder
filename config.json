@@ -1,6 +1,7 @@
 {
   "streamers": [],
   "settings": {
-    "savePath": "D:\\rex\\bili-recorder\\recordings"
+    "savePath": "D:\\rex\\bili-recorder\\recordings",
+    "format": "flv"
   }
 }
