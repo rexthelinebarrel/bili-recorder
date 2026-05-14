@@ -101,16 +101,6 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
   <input type="text" id="savePathInput">
   <button class="btn-sm" id="btnSavePath">保存</button>
 </div>
-<div class="settings-row">
-  <label>输出格式</label>
-  <select id="formatSelect" style="padding:8px 12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-family:var(--font-ui);outline:none">
-    <option value="flv">FLV (原始流)</option>
-    <option value="mkv">MKV (推荐，兼容好)</option>
-    <option value="ts">TS (最稳定)</option>
-    <option value="mp4">MP4 (重编码，吃CPU)</option>
-  </select>
-  <button class="btn-sm" id="btnSaveFormat">保存</button>
-</div>
 
 <script>
 const API = {
@@ -150,7 +140,6 @@ async function refresh() {
   const data = await API.get('/api/status');
   const settings = await API.get('/api/settings');
   document.getElementById('savePathInput').value = settings.savePath || '';
-  document.getElementById('formatSelect').value = settings.format || 'flv';
 
   // Group recordings by streamerId
   const recsByStreamer = {};
@@ -345,11 +334,6 @@ document.getElementById('btnSavePath').addEventListener('click', async () => {
   showToast('保存路径已更新');
 });
 
-document.getElementById('btnSaveFormat').addEventListener('click', async () => {
-  const val = document.getElementById('formatSelect').value;
-  await API.put('/api/settings', { format: val });
-  showToast('格式已切换为 ' + val.toUpperCase());
-});
 
 refresh();
 setInterval(refresh, 30000);
