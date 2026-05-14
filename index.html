@@ -152,6 +152,7 @@ async function refresh() {
         ${s.recording ? '<div class="progress-line" style="width:100%"></div>' : ''}
         <div class="card-actions" style="margin-top:8px">
           ${s.recording ? '<button class="btn-sm danger" onclick="stopRecord(\''+s.id+'\')">停止录制</button>' : ''}
+          <button class="btn-sm danger" onclick="removeStreamer('${s.id}')" style="${s.recording ? '' : 'margin-left:0'}">删除主播</button>
         </div>
       </div>
     `).join('');
