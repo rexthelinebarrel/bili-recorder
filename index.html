@@ -201,6 +201,7 @@ async function refresh() {
         </div>
         <span class="file-size" style="margin-right:8px">${formatSize(r.size)}</span>
         <button class="btn-sm" onclick="playFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="用系统播放器打开">▶</button>
+        ${r.filename.toLowerCase().endsWith('.flv') ? `<button class="btn-sm" onclick="convertFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="无损转为MKV" style="margin-left:4px">→MKV</button>` : ''}
         <button class="btn-sm danger" onclick="deleteFile('${r.filePath.replace(/\\/g,'\\\\')}')" title="删除文件" style="margin-left:4px">✕</button>
       </div>
     `).join('');
@@ -225,6 +226,13 @@ async function playFile(filePath) {
   const r = await API.post('/api/open-file', { filePath });
   if (r.ok) showToast('已打开播放器');
   else showToast(r.error || '打开失败');
+}
+
+async function convertFile(filePath) {
+  showToast('正在转换为 MKV...');
+  const r = await API.post('/api/convert', { filePath });
+  if (r.ok) { showToast('已转换为 MKV！'); refresh(); }
+  else showToast(r.error || '转换失败');
 }
 
 async function deleteFile(filePath) {

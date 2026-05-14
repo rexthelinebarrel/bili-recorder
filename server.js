@@ -518,6 +518,29 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/convert' && req.method === 'POST') {
+    const body = await parseJSON(req);
+    const filePath = body.filePath;
+    if (!filePath || !fs.existsSync(filePath)) { sendJSON(res, 400, { error: 'File not found' }); return; }
+    if (Recorder._processes && Object.values(Recorder._processes).some(e => e.filePath === filePath)) {
+      sendJSON(res, 409, { error: '文件正在录制中，请先停止再转换' });
+      return;
+    }
+    const newPath = filePath.replace(/\.flv$/i, '.mkv');
+    try {
+      await new Promise((resolve, reject) => {
+        const proc = spawn(FFMPEG_BIN, ['-i', filePath, '-c', 'copy', '-y', newPath], { stdio: 'ignore' });
+        proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`)); });
+        proc.on('error', reject);
+      });
+      logger.info(`[convert] ${filePath} -> ${newPath}`);
+      sendJSON(res, 200, { ok: true, newPath });
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
+    return;
+  }
+
   if (url.pathname === '/api/open-file' && req.method === 'POST') {
     const body = await parseJSON(req);
     const filePath = body.filePath;
