@@ -223,12 +223,13 @@ const Poller = {
           if (!Recorder.isRecording(s.id)) {
             const lastLive = s.lastLiveTime || 0;
             const gap = Date.now() - lastLive;
-            // Only reconnect if within window or lastLive is recent
-            try {
-              await Recorder.start(s.id, s.roomId, s.name);
-              Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
-            } catch (e) {
-              console.error(`[recorder] Reconnect failed for ${s.name}:`, e.message);
+            if (gap <= RECONNECT_WINDOW) {
+              try {
+                await Recorder.start(s.id, s.roomId, s.name);
+                Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
+              } catch (e) {
+                console.error(`[recorder] Reconnect failed for ${s.name}:`, e.message);
+              }
             }
           }
         }
