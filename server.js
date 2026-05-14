@@ -181,3 +181,65 @@ const Recorder = {
     };
   }
 };
+
+const POLL_INTERVAL = 30_000;  // 30 seconds
+const RECONNECT_WINDOW = 2 * 60 * 1000;  // 2 minutes
+
+const Poller = {
+  _timer: null,
+
+  start() {
+    this._timer = setInterval(() => this.check(), POLL_INTERVAL);
+    this.check(); // immediate first check
+  },
+
+  async check() {
+    const streamers = Store.getStreamers();
+    for (const s of streamers) {
+      try {
+        const info = await BiliAPI.getRoomInfo(s.roomId);
+        const prevStatus = s.status;
+
+        if (info.status === 'live' && prevStatus === 'offline') {
+          // Just went live — start recording
+          s.status = 'live';
+          s.name = info.name;
+          Store.updateStreamer(s.id, { status: 'live', name: info.name, lastLiveTime: Date.now() });
+          try {
+            await Recorder.start(s.id, s.roomId, s.name);
+            Store.updateStreamer(s.id, { recording: true });
+          } catch (e) {
+            console.error(`[recorder] Failed to start for ${s.name}:`, e.message);
+          }
+        } else if (info.status === 'offline' && prevStatus === 'live') {
+          // Just went offline
+          const wasRecording = Recorder.isRecording(s.id);
+          if (wasRecording) {
+            Recorder.stop(s.id);
+          }
+          Store.updateStreamer(s.id, { status: 'offline', recording: false });
+        } else if (info.status === 'live' && prevStatus === 'live') {
+          // Still live — check if ffmpeg died (reconnect)
+          if (!Recorder.isRecording(s.id)) {
+            const lastLive = s.lastLiveTime || 0;
+            const gap = Date.now() - lastLive;
+            // Only reconnect if within window or lastLive is recent
+            try {
+              await Recorder.start(s.id, s.roomId, s.name);
+              Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
+            } catch (e) {
+              console.error(`[recorder] Reconnect failed for ${s.name}:`, e.message);
+            }
+          }
+        }
+
+      } catch (e) {
+        console.error(`[poller] Error checking room ${s.roomId}:`, e.message);
+      }
+    }
+  },
+
+  stop() {
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+  }
+};
