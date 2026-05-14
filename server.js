@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DEFAULT_CONFIG = {
@@ -57,3 +58,49 @@ const Store = {
 };
 
 Store.load();
+
+const BiliAPI = {
+  _get(url) {
+    return new Promise((resolve, reject) => {
+      https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try { resolve(JSON.parse(data)); }
+          catch (e) { reject(e); }
+        });
+      }).on('error', reject);
+    });
+  },
+
+  async getRoomInfo(roomId) {
+    const url = `https://api.live.bilibili.com/room/v1/Room/get_info?room_id=${roomId}`;
+    const res = await this._get(url);
+    if (res.code !== 0) throw new Error(`BiliAPI error: ${res.message}`);
+    return {
+      roomId: String(res.data.room_id),
+      name: res.data.anchor_info?.base_info?.uname || `房间${roomId}`,
+      status: res.data.live_status === 1 ? 'live' : 'offline',
+      title: res.data.title || ''
+    };
+  },
+
+  async getStreamUrl(roomId) {
+    const url = `https://api.live.bilibili.com/room/v1/Room/playUrl?room_id=${roomId}&platform=web&qn=10000`;
+    const res = await this._get(url);
+    if (res.code !== 0) throw new Error(`BiliAPI error: ${res.message}`);
+    const streams = res.data?.playurl_info?.playurl?.stream || [];
+    // Prefer the first available stream URL
+    for (const stream of streams) {
+      for (const format of (stream.format || [])) {
+        for (const codec of (format.codec || [])) {
+          const baseUrl = codec.base_url || '';
+          const host = codec.url_info?.[0]?.host || '';
+          const extra = codec.url_info?.[0]?.extra || '';
+          if (baseUrl && host) return host + baseUrl + extra;
+        }
+      }
+    }
+    throw new Error('No stream URL found');
+  }
+};
