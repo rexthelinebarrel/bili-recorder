@@ -371,9 +371,42 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/streamer' && req.method === 'POST') {
     const body = await parseJSON(req);
-    const roomId = String(body.roomId || '').trim();
-    if (!roomId || !/^\d+$/.test(roomId)) {
-      sendJSON(res, 400, { error: 'Invalid room ID' });
+    const input = String(body.roomId || '').trim();
+    if (!input) {
+      sendJSON(res, 400, { error: 'Invalid input' });
+      return;
+    }
+
+    let roomId = null;
+    // 1. Pure number: direct room ID
+    if (/^\d+$/.test(input)) {
+      roomId = input;
+    }
+    // 2. live.bilibili.com/<room_id> URL
+    else {
+      const urlMatch = input.match(/live\.bilibili\.com\/(\d+)/);
+      if (urlMatch) roomId = urlMatch[1];
+    }
+    // 3. b23.tv short link
+    if (!roomId && /b23\.tv/.test(input)) {
+      try {
+        let shortUrl = input;
+        if (!shortUrl.startsWith('http')) shortUrl = 'https://' + shortUrl;
+        const redirected = await new Promise((resolve, reject) => {
+          https.get(shortUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (resp) => {
+            const loc = resp.headers.location || '';
+            const match = loc.match(/live\.bilibili\.com\/(\d+)/);
+            resolve(match ? match[1] : null);
+          }).on('error', reject);
+        });
+        if (redirected) roomId = redirected;
+      } catch {}
+    }
+    // 4. URL path ending in just the room ID (e.g., https://space.bilibili.com/... but that's UID)
+    // For now, skip. Could add UID lookup later via API.
+
+    if (!roomId) {
+      sendJSON(res, 400, { error: '无法识别房间号，请输入纯数字房间号、live.bilibili.com 链接或 b23.tv 短链' });
       return;
     }
     if (Store.getStreamers().find(s => s.roomId === roomId)) {
