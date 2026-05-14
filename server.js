@@ -201,7 +201,7 @@ const Recorder = {
 
     const streamer = Store.getStreamers().find(s => s.id === streamerId);
     const quality = (streamer && streamer.quality) || 'auto';
-    const fmt = Store.getSettings().format || 'flv';
+    const fmt = (streamer && streamer.format) || Store.getSettings().format || 'flv';
     const { ext } = getFfmpegArgs('', '', fmt, quality);
 
     const savePath = Store.getSettings().savePath;
@@ -516,7 +516,8 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, 409, { error: 'Streamer already added' });
       return;
     }
-    const s = { id: Date.now().toString(), roomId, name: roomId, status: 'offline', recording: false, quality: 'auto' };
+    const defaultFmt = Store.getSettings().format || 'flv';
+    const s = { id: Date.now().toString(), roomId, name: roomId, status: 'offline', recording: false, quality: 'auto', format: defaultFmt };
     Store.addStreamer(s);
     // Fetch name immediately
     try {
@@ -590,6 +591,22 @@ const server = http.createServer(async (req, res) => {
     s.quality = quality;
     Store.updateStreamer(id, { quality });
     sendJSON(res, 200, { ok: true, quality });
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/format') && req.method === 'PUT') {
+    const id = url.pathname.split('/')[3];
+    const body = await parseJSON(req);
+    const format = body.format;
+    if (!['flv', 'mkv', 'ts', 'mp4'].includes(format)) {
+      sendJSON(res, 400, { error: 'Invalid format. Use: flv, mkv, ts, mp4' });
+      return;
+    }
+    const s = Store.getStreamers().find(s => s.id === id);
+    if (!s) { sendJSON(res, 404, { error: 'Streamer not found' }); return; }
+    s.format = format;
+    Store.updateStreamer(id, { format });
+    sendJSON(res, 200, { ok: true, format });
     return;
   }
 
@@ -740,6 +757,14 @@ server.listen(PORT, () => {
       Store.updateStreamer(s.id, { status: 'offline', recording: false });
       logger.info(`[init] Reset ${s.name} to offline (server restart)`);
     }
+  }
+  // Ensure all streamers have format and quality fields
+  const defaultFmt = Store.getSettings().format || 'flv';
+  for (const s of Store.getStreamers()) {
+    const updates = {};
+    if (!s.format) updates.format = defaultFmt;
+    if (!s.quality) updates.quality = 'auto';
+    if (Object.keys(updates).length > 0) Store.updateStreamer(s.id, updates);
   }
   migrateOrphanedDirs();
   logger.info(`Bili Recorder running at http://localhost:${PORT}`);
