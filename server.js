@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const { spawn } = require('child_process');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DEFAULT_CONFIG = {
@@ -102,5 +103,81 @@ const BiliAPI = {
       }
     }
     throw new Error('No stream URL found');
+  }
+};
+
+const Recorder = {
+  _processes: {},
+
+  _ensureDir(dir) {
+    fs.mkdirSync(dir, { recursive: true });
+  },
+
+  async start(streamerId, roomId, streamerName) {
+    if (this._processes[streamerId]) return;
+
+    const savePath = Store.getSettings().savePath;
+    const dir = path.join(savePath, streamerName);
+    this._ensureDir(dir);
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filePath = path.join(dir, `${ts}.flv`);
+
+    const streamUrl = await BiliAPI.getStreamUrl(roomId);
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn('ffmpeg', [
+        '-i', streamUrl,
+        '-c', 'copy',
+        '-f', 'flv',
+        '-y',
+        filePath
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      proc.stderr.on('data', (d) => {});
+
+      proc.on('error', (err) => {
+        delete this._processes[streamerId];
+        reject(err);
+      });
+
+      setTimeout(() => {
+        if (proc.exitCode !== null && proc.exitCode !== 0) {
+          delete this._processes[streamerId];
+          reject(new Error('ffmpeg exited immediately'));
+          return;
+        }
+        this._processes[streamerId] = {
+          process: proc,
+          filePath,
+          startedAt: Date.now()
+        };
+        proc.on('exit', () => { delete this._processes[streamerId]; });
+        resolve(filePath);
+      }, 2000);
+    });
+  },
+
+  stop(streamerId) {
+    const entry = this._processes[streamerId];
+    if (!entry) return null;
+    entry.process.kill('SIGTERM');
+    const filePath = entry.filePath;
+    delete this._processes[streamerId];
+    return filePath;
+  },
+
+  isRecording(streamerId) {
+    return !!this._processes[streamerId];
+  },
+
+  getRecordingInfo(streamerId) {
+    const entry = this._processes[streamerId];
+    if (!entry) return null;
+    return {
+      filePath: entry.filePath,
+      startedAt: entry.startedAt,
+      duration: Math.floor((Date.now() - entry.startedAt) / 1000)
+    };
   }
 };
