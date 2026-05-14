@@ -78,6 +78,7 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
   </div>
   <div class="header-btns">
     <button class="btn" id="btnCheck">立即检查</button>
+    <button class="btn" id="btnShutdown" style="color:var(--danger);border-color:var(--danger)">关闭服务</button>
   </div>
 </div>
 
@@ -310,6 +311,13 @@ document.getElementById('btnCheck').addEventListener('click', async () => {
   await API.post('/api/check');
   showToast('已发起检查');
   setTimeout(refresh, 2000);
+});
+
+document.getElementById('btnShutdown').addEventListener('click', async () => {
+  if (!confirm('确定要关闭录制服务吗？\n\n关闭后将停止所有录制，需重新运行 start.bat 才能恢复。')) return;
+  await API.post('/api/shutdown');
+  showToast('服务已关闭');
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px">直播录制助手已关闭<br><br>重新启动请运行 start.bat</div>';
 });
 
 document.getElementById('btnAdd').addEventListener('click', async () => {

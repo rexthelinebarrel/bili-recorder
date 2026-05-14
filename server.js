@@ -712,6 +712,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/shutdown' && req.method === 'POST') {
+    sendJSON(res, 200, { ok: true });
+    logger.info('Server shutting down by user request...');
+    Poller.stop();
+    // Stop all active recordings gracefully
+    for (const [sid] of Object.entries(Recorder._processes)) {
+      Recorder.stop(sid);
+    }
+    setTimeout(() => { process.exit(0); }, 500);
+    return;
+  }
+
   res.writeHead(404);
   res.end('Not Found');
 });
