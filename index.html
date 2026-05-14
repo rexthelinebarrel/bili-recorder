@@ -98,10 +98,10 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 <div class="settings-row">
   <label>输出格式</label>
   <select id="formatSelect" style="padding:8px 12px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-family:var(--font-ui);outline:none">
-    <option value="flv">FLV (原始流，需转换才能播)</option>
-    <option value="mkv">MKV (推荐，录制中也能播)</option>
-    <option value="ts">TS (最稳定，录制中也能播)</option>
-    <option value="mp4">MP4 (录完才能播)</option>
+    <option value="flv">FLV (原始流)</option>
+    <option value="mkv">MKV (推荐，兼容好)</option>
+    <option value="ts">TS (最稳定)</option>
+    <option value="mp4">MP4 (重编码，吃CPU)</option>
   </select>
   <button class="btn-sm" id="btnSaveFormat">保存</button>
 </div>
@@ -223,6 +223,15 @@ async function stopRecord(id) {
 }
 
 async function playFile(filePath) {
+  // MP4 is unplayable while recording — moov atom not written until EOF
+  if (filePath.toLowerCase().endsWith('.mp4')) {
+    const data = await API.get('/api/status');
+    const recording = data.streamers.some(s => s.recording);
+    if (recording) {
+      showToast('MP4 录制中暂无法播放，录完后可播');
+      return;
+    }
+  }
   const r = await API.post('/api/open-file', { filePath });
   if (r.ok) showToast('已打开播放器');
   else showToast(r.error || '打开失败');
