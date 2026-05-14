@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { spawn } = require('child_process');
+const http = require('http');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DEFAULT_CONFIG = {
@@ -244,3 +245,129 @@ const Poller = {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
   }
 };
+
+// ─── HTTP Server ────────────────────────────────────────────────────────────────
+
+function parseJSON(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try { resolve(JSON.parse(body)); }
+      catch { resolve({}); }
+    });
+  });
+}
+
+function sendJSON(res, code, data) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(data));
+}
+
+function serveStatic(res, filePath, contentType) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    res.writeHead(200, { 'Content-Type': contentType + '; charset=utf-8' });
+    res.end(content);
+  } catch {
+    res.writeHead(404);
+    res.end('Not Found');
+  }
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
+  // Static files
+  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+    serveStatic(res, path.join(__dirname, 'index.html'), 'text/html');
+    return;
+  }
+
+  // API routes
+  if (url.pathname === '/api/status' && req.method === 'GET') {
+    const streamers = Store.getStreamers();
+    const recordings = [];
+    const savePath = Store.getSettings().savePath;
+    for (const s of streamers) {
+      const dir = path.join(savePath, s.name);
+      try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          if (f.endsWith('.flv')) {
+            const stat = fs.statSync(path.join(dir, f));
+            recordings.push({ filename: s.name + '/' + f, streamerId: s.id, size: stat.size, mtime: stat.mtimeMs });
+          }
+        }
+      } catch {}
+    }
+    recordings.sort((a, b) => b.mtime - a.mtime);
+    sendJSON(res, 200, { streamers, recordings });
+    return;
+  }
+
+  if (url.pathname === '/api/streamer' && req.method === 'POST') {
+    const body = await parseJSON(req);
+    const roomId = String(body.roomId || '').trim();
+    if (!roomId || !/^\d+$/.test(roomId)) {
+      sendJSON(res, 400, { error: 'Invalid room ID' });
+      return;
+    }
+    if (Store.getStreamers().find(s => s.roomId === roomId)) {
+      sendJSON(res, 409, { error: 'Streamer already added' });
+      return;
+    }
+    const s = { id: Date.now().toString(), roomId, name: roomId, status: 'offline', recording: false };
+    Store.addStreamer(s);
+    // Fetch name immediately
+    try {
+      const info = await BiliAPI.getRoomInfo(roomId);
+      s.name = info.name;
+      Store.updateStreamer(s.id, { name: info.name });
+    } catch {}
+    sendJSON(res, 201, s);
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/streamer/') && req.method === 'DELETE') {
+    const id = url.pathname.split('/').pop();
+    if (Recorder.isRecording(id)) Recorder.stop(id);
+    Store.removeStreamer(id);
+    sendJSON(res, 200, { ok: true });
+    return;
+  }
+
+  if (url.pathname === '/api/settings' && req.method === 'GET') {
+    sendJSON(res, 200, Store.getSettings());
+    return;
+  }
+
+  if (url.pathname === '/api/settings' && req.method === 'PUT') {
+    const body = await parseJSON(req);
+    Store.updateSettings(body);
+    sendJSON(res, 200, Store.getSettings());
+    return;
+  }
+
+  if (url.pathname === '/api/check' && req.method === 'POST') {
+    Poller.check();
+    sendJSON(res, 200, { ok: true });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end('Not Found');
+});
+
+const PORT = process.env.PORT || 3456;
+server.listen(PORT, () => {
+  console.log(`Bili Recorder running at http://localhost:${PORT}`);
+  Poller.start();
+});
