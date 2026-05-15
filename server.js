@@ -687,7 +687,17 @@ const server = http.createServer(async (req, res) => {
     try {
       const { execFile } = require('child_process');
       if (process.platform === 'win32') {
-        execFile('cmd', ['/c', 'start', '', filePath]);
+        const vlcPaths = [
+          'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe',
+          'C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe',
+        ];
+        const fs = require('fs');
+        const vlc = vlcPaths.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+        if (vlc) {
+          execFile(vlc, [filePath]);
+        } else {
+          execFile('cmd', ['/c', 'start', '', filePath]);
+        }
       } else if (process.platform === 'darwin') {
         execFile('open', [filePath]);
       } else {
