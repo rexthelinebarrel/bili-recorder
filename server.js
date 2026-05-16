@@ -844,6 +844,60 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/highlights/clip' && req.method === 'POST') {
+    const body = await parseJSON(req);
+    const { ids, streamerName, date, filePath } = body;
+    if (!ids || !ids.length || !streamerName || !date || !filePath) {
+      sendJSON(res, 400, { error: 'Missing ids, streamerName, date, or filePath' });
+      return;
+    }
+    if (!fs.existsSync(filePath)) {
+      sendJSON(res, 400, { error: 'Source video file not found: ' + filePath });
+      return;
+    }
+    const data = HighlightStore.getAll(streamerName, date);
+    const toClip = (data.highlights || []).filter(h => ids.includes(h.id));
+    if (toClip.length === 0) {
+      sendJSON(res, 400, { error: 'No matching highlights found' });
+      return;
+    }
+
+    const results = [];
+    const clipDir = path.dirname(filePath);
+
+    for (const h of toClip) {
+      const srcExt = path.extname(filePath);
+      const clipName = path.basename(filePath, srcExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
+      const clipPath = path.join(clipDir, clipName);
+
+      try {
+        await new Promise((resolve, reject) => {
+          const args = [
+            '-ss', String(h.startOffset),
+            '-to', String(h.endOffset),
+            '-i', filePath,
+            '-c', 'copy',
+            '-avoid_negative_ts', 'make_zero',
+            '-y', clipPath
+          ];
+          const proc = spawn(FFMPEG_BIN, args, { stdio: 'ignore' });
+          proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)); });
+          proc.on('error', reject);
+        });
+
+        HighlightStore.update(streamerName, date, h.id, { clipped: true, clipFile: clipPath });
+        results.push({ id: h.id, ok: true, clipFile: clipPath });
+        logger.info('[clip] ' + clipName + ' (' + Math.floor(h.startOffset) + 's-' + Math.floor(h.endOffset) + 's)');
+      } catch (e) {
+        results.push({ id: h.id, ok: false, error: e.message });
+        logger.error('[clip] Failed: ' + h.id + ' — ' + e.message);
+      }
+    }
+
+    sendJSON(res, 200, { results });
+    return;
+  }
+
   res.writeHead(404);
   res.end('Not Found');
 });

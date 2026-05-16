@@ -67,6 +67,20 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 .rec-info{font-size:10px;color:var(--text3);margin-top:1px}
 .toast{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:8px 24px;font-size:12px;font-weight:500;z-index:100;animation:fadeIn .3s}
 @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.hl-item{display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);gap:10px;cursor:pointer}
+.hl-item.selected{background:var(--accent-bg);margin:0 -8px;padding-left:8px;padding-right:8px}
+.hl-check{flex-shrink:0;accent-color:var(--text)}
+.hl-info{flex:1;min-width:0}
+.hl-title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.hl-meta{font-size:10px;color:var(--text3);margin-top:2px}
+.hl-score{font-size:11px;font-weight:700;flex-shrink:0;text-align:center;min-width:36px}
+.hl-score.hot{color:#E8860C}
+.hl-score.wild{color:var(--danger)}
+.tag{display:inline-block;padding:1px 6px;font-size:9px;font-weight:600;border-radius:2px;margin-right:3px}
+.tag-danmaku{background:#E8D5F5;color:#6B3FA0}
+.tag-gift{background:#FDE4C3;color:#A05B0A}
+.tag-audio{background:#D6ECFB;color:#2A6B9E}
+.tag-guard{background:#FDDEDE;color:#B52828}
 </style>
 </head>
 <body>
@@ -95,6 +109,20 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 
 <div class="section-label" id="orphanedLabel" style="display:none">未归类录像</div>
 <div id="orphanedList"></div>
+
+<div class="section-label" id="highlightsLabel" style="display:none">高光切片</div>
+<div id="highlightsArea">
+  <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+    <select id="hlStreamerSelect" onchange="refreshHighlights()" style="padding:6px 10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-family:var(--font-ui)">
+      <option value="">选择主播...</option>
+    </select>
+    <select id="hlDateSelect" onchange="refreshHighlights()" style="padding:6px 10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-family:var(--font-ui)">
+      <option value="">今天</option>
+    </select>
+    <button class="btn-sm" id="btnClipSelected" onclick="clipSelected()" disabled>裁剪选中</button>
+  </div>
+  <div id="highlightsList"></div>
+</div>
 
 <div class="section-label">设置</div>
 <div class="settings-row">
@@ -245,6 +273,7 @@ async function refresh() {
   }
 
   document.getElementById('clock').textContent = '更新于 '+new Date().toLocaleTimeString('zh-CN');
+  if (document.getElementById('hlStreamerSelect').value) refreshHighlights();
 }
 
 async function startRecord(id) {
@@ -342,6 +371,155 @@ document.getElementById('btnSavePath').addEventListener('click', async () => {
   showToast('保存路径已更新');
 });
 
+
+let highlightData = { highlights: [], availableDates: [] };
+let selectedHighlightIds = new Set();
+
+function formatOffset(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+async function refreshHighlights() {
+  const sel = document.getElementById('hlStreamerSelect');
+  const dateSel = document.getElementById('hlDateSelect');
+  const streamerName = sel.value;
+  const date = dateSel.value || new Date().toISOString().slice(0, 10);
+
+  if (!streamerName) {
+    document.getElementById('highlightsLabel').style.display = 'none';
+    document.getElementById('highlightsList').innerHTML = '';
+    return;
+  }
+
+  // Lazy-populate streamer dropdown
+  if (sel.options.length <= 1) {
+    try {
+      const statusData = await API.get('/api/status');
+      for (const s of statusData.streamers) {
+        if ([...sel.options].find(o => o.value === s.name)) continue;
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        opt.textContent = s.name;
+        sel.appendChild(opt);
+      }
+    } catch {}
+  }
+
+  try {
+    const url = '/api/highlights?streamerName=' + encodeURIComponent(streamerName) + '&date=' + date;
+    highlightData = await API.get(url);
+  } catch { highlightData = { highlights: [], availableDates: [] }; }
+
+  document.getElementById('highlightsLabel').style.display = '';
+  selectedHighlightIds.clear();
+  renderHighlightList();
+}
+
+function renderHighlightList() {
+  const list = document.getElementById('highlightsList');
+  const hl = highlightData.highlights || [];
+
+  // Update date dropdown
+  const dateSel = document.getElementById('hlDateSelect');
+  const dates = highlightData.availableDates || [];
+  dateSel.innerHTML = dates.map(d => '<option value="' + d + '">' + d + '</option>').join('');
+  if (dates.length === 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    dateSel.innerHTML = '<option value="' + today + '">' + today + '</option>';
+  }
+
+  if (hl.length === 0) {
+    list.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:8px 0">暂无高光标注</div>';
+    updateClipButton();
+    return;
+  }
+
+  list.innerHTML = hl.map(h => {
+    const tagHTML = (h.triggers || []).map(t => {
+      const cls = t === 'danmaku_peak' || t === 'danmaku_super_peak' || t === 'keyword_flood' ? 'tag-danmaku' :
+                  t === 'gift_burst' ? 'tag-gift' :
+                  t === 'guard_buy' ? 'tag-guard' :
+                  t === 'audio_peak' ? 'tag-audio' : '';
+      const label = t === 'danmaku_peak' ? '弹幕峰值' :
+                    t === 'danmaku_super_peak' ? '超级峰值' :
+                    t === 'keyword_flood' ? '关键词刷屏' :
+                    t === 'gift_burst' ? '礼物轰炸' :
+                    t === 'guard_buy' ? '大航海' :
+                    t === 'audio_peak' ? '音频高能' : t;
+      return '<span class="tag ' + cls + '">' + label + '</span>';
+    }).join('');
+
+    const scoreClass = h.score >= 0.8 ? 'wild' : h.score >= 0.5 ? 'hot' : '';
+    const selected = selectedHighlightIds.has(h.id) ? ' selected' : '';
+    const clippedBadge = h.clipped ? ' <span style="color:var(--live);font-size:10px">已裁剪</span>' : '';
+    const clipLink = h.clipFile ? ' <span style="font-size:10px;color:var(--text3);cursor:pointer" onclick="event.stopPropagation();playFile(\'' + h.clipFile.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + '\')">▶播放</span>' : '';
+
+    return '<div class="hl-item' + selected + '" onclick="toggleHighlight(\'' + h.id + '\', this)">' +
+      '<input type="checkbox" class="hl-check" ' + (selected ? 'checked ' : '') + 'onclick="event.stopPropagation();toggleHighlight(\'' + h.id + '\', this.parentElement)" style="pointer-events:auto">' +
+      '<div class="hl-info">' +
+        '<div class="hl-title">' + formatOffset(h.startOffset) + '–' + formatOffset(h.endOffset) + ' ' + tagHTML + clippedBadge + clipLink + '</div>' +
+        '<div class="hl-meta">持续' + Math.round(h.duration) + 's · 弹幕' + (h.danmakuCount || 0) + '条 · 礼物¥' + (h.totalGiftValue || 0) + '</div>' +
+      '</div>' +
+      '<div class="hl-score ' + scoreClass + '">' + (h.score * 100).toFixed(0) + '%</div>' +
+    '</div>';
+  }).join('');
+
+  updateClipButton();
+}
+
+function toggleHighlight(id, el) {
+  if (selectedHighlightIds.has(id)) {
+    selectedHighlightIds.delete(id);
+    if (el) el.classList.remove('selected');
+  } else {
+    selectedHighlightIds.add(id);
+    if (el) el.classList.add('selected');
+  }
+  updateClipButton();
+}
+
+function updateClipButton() {
+  const btn = document.getElementById('btnClipSelected');
+  btn.textContent = '裁剪选中 (' + selectedHighlightIds.size + ')';
+  btn.disabled = selectedHighlightIds.size === 0;
+}
+
+async function clipSelected() {
+  if (selectedHighlightIds.size === 0) return;
+  const sel = document.getElementById('hlStreamerSelect');
+  const dateSel = document.getElementById('hlDateSelect');
+  const streamerName = sel.value;
+  const date = dateSel.value || new Date().toISOString().slice(0, 10);
+
+  // Find source file from recordings
+  let filePath = null;
+  try {
+    const statusData = await API.get('/api/status');
+    const s = statusData.streamers.find(s => s.name === streamerName);
+    const recs = (statusData.recordings || []).filter(r => r.streamerId === (s ? s.id : ''));
+    if (recs.length > 0) filePath = recs[0].filePath;
+  } catch {}
+  if (!filePath) { showToast('找不到可用的录制文件'); return; }
+
+  showToast('正在裁剪 ' + selectedHighlightIds.size + ' 个高光片段...');
+  try {
+    const body = { ids: [...selectedHighlightIds], streamerName, date, filePath };
+    const r = await API.post('/api/highlights/clip', body);
+    if (r && r.results) {
+      const ok = r.results.filter(x => x.ok).length;
+      const fail = r.results.filter(x => !x.ok).length;
+      showToast('裁剪完成: ' + ok + ' 成功' + (fail > 0 ? ', ' + fail + ' 失败' : ''));
+    } else {
+      showToast(r.error || '裁剪请求失败');
+    }
+  } catch (e) {
+    showToast('裁剪失败: ' + e.message);
+  }
+  selectedHighlightIds.clear();
+  await refreshHighlights();
+}
 
 refresh();
 setInterval(refresh, 30000);
