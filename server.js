@@ -6,6 +6,7 @@ const http = require('http');
 const { createDanmakuParser } = require('./lib/danmaku-parser');
 const { createHighlightEngine } = require('./lib/highlight-engine');
 const { HighlightStore } = require('./lib/highlight-store');
+const { analyzeAudio } = require('./lib/audio-analyzer');
 
 // ─── Logger ──────────────────────────────────────────────────────────────────
 const LOG_PATH = path.join(__dirname, 'app.log');
@@ -400,7 +401,18 @@ const Poller = {
           const wasRecording = Recorder.isRecording(s.id);
           if (wasRecording) {
             const stoppedFile = await Recorder.stop(s.id);
-            if (stoppedFile) logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
+            if (stoppedFile) {
+              logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
+              const engine = DanmakuManager.getEngine(s.id);
+              if (engine) {
+                try {
+                  const peaks = await analyzeAudio(stoppedFile, logger);
+                  if (peaks.length > 0) engine.feedAudioResult(peaks);
+                } catch (e) {
+                  logger.warn(`[audio] Analysis failed for ${s.name}: ${e.message}`);
+                }
+              }
+            }
           }
           DanmakuManager.stop(s.id);
           Store.updateStreamer(s.id, { status: 'offline', recording: false });
@@ -623,7 +635,16 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/stop') && req.method === 'POST') {
     const id = url.pathname.split('/')[3];
     if (Recorder.isRecording(id)) {
-      await Recorder.stop(id);
+      const stoppedFile = await Recorder.stop(id);
+      const engine = DanmakuManager.getEngine(id);
+      if (engine && stoppedFile) {
+        try {
+          const peaks = await analyzeAudio(stoppedFile, logger);
+          if (peaks.length > 0) engine.feedAudioResult(peaks);
+        } catch (e) {
+          logger.warn(`[audio] Analysis failed: ${e.message}`);
+        }
+      }
       DanmakuManager.stop(id);
       Store.updateStreamer(id, { recording: false });
       sendJSON(res, 200, { ok: true });
