@@ -379,6 +379,7 @@ const Poller = {
               }
             } else {
               logger.warn(`[recorder] ${s.name} recorder dead >2min, giving up`);
+              Store.updateStreamer(s.id, { status: 'offline', recording: false });
             }
           }
         }
