@@ -3,6 +3,9 @@ const path = require('path');
 const https = require('https');
 const { spawn } = require('child_process');
 const http = require('http');
+const { createDanmakuParser } = require('./lib/danmaku-parser');
+const { createHighlightEngine } = require('./lib/highlight-engine');
+const { HighlightStore } = require('./lib/highlight-store');
 
 // ─── Logger ──────────────────────────────────────────────────────────────────
 const LOG_PATH = path.join(__dirname, 'app.log');
@@ -300,6 +303,38 @@ const Recorder = {
   }
 };
 
+const DanmakuManager = {
+  _engines: {},   // streamerId -> HighlightEngine
+  _parsers: {},   // streamerId -> DanmakuParser
+
+  start(streamerId, streamerName, roomId) {
+    if (this._parsers[streamerId]) return;
+    const engine = createHighlightEngine(streamerId, streamerName, roomId, logger);
+    const parser = createDanmakuParser(roomId, logger);
+    this._engines[streamerId] = engine;
+    this._parsers[streamerId] = parser;
+    engine.setRecordingStart(Date.now());
+
+    parser.on('danmaku', (d) => engine.feedDanmaku(d.text));
+    parser.on('gift', (d) => engine.feedGift(d.rmb));
+    parser.on('guard', (d) => engine.feedGuard(d.guardLevel, d.guardName, d.rmb));
+    parser.on('close', () => logger.warn(`[danmaku] Parser closed for ${streamerName}`));
+    parser.on('error', (d) => logger.warn(`[danmaku] Error for ${streamerName}: ${d.message}`));
+
+    parser.start().catch(e => logger.error(`[danmaku] Failed to start for ${streamerName}: ${e.message}`));
+    logger.info(`[danmaku] Started for ${streamerName} (room ${roomId})`);
+  },
+
+  stop(streamerId) {
+    const parser = this._parsers[streamerId];
+    if (parser) { parser.stop(); delete this._parsers[streamerId]; }
+    if (this._engines[streamerId]) delete this._engines[streamerId];
+  },
+
+  getEngine(streamerId) { return this._engines[streamerId] || null; },
+  isRunning(streamerId) { return !!this._parsers[streamerId]; }
+};
+
 const POLL_INTERVAL = 30_000;  // 30 seconds
 const RECONNECT_WINDOW = 2 * 60 * 1000;  // 2 minutes
 
@@ -351,6 +386,7 @@ const Poller = {
             const filePath = await Recorder.start(s.id, realRoomId, s.name);
             logger.info(`[recorder] Started recording ${s.name} -> ${filePath}`);
             Store.updateStreamer(s.id, { recording: true, lastFilePath: filePath });
+            DanmakuManager.start(s.id, s.name, realRoomId);
           } catch (e) {
             logger.error(`[recorder] Failed to start for ${s.name}: ${e.message}`);
           }
@@ -362,6 +398,7 @@ const Poller = {
             const stoppedFile = await Recorder.stop(s.id);
             if (stoppedFile) logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
           }
+          DanmakuManager.stop(s.id);
           Store.updateStreamer(s.id, { status: 'offline', recording: false });
         } else if (info.status === 'live' && prevStatus === 'live') {
           // Still live — check if ffmpeg died (reconnect)
@@ -568,6 +605,10 @@ const server = http.createServer(async (req, res) => {
     try {
       await Recorder.start(id, realRoomId, s.name);
       Store.updateStreamer(id, { recording: true, lastLiveTime: Date.now() });
+      const s2 = Store.getStreamers().find(s => s.id === id);
+      if (s2 && !DanmakuManager.isRunning(id)) {
+        DanmakuManager.start(id, s2.name, s2.realRoomId || s2.roomId);
+      }
       sendJSON(res, 200, { ok: true });
     } catch (e) {
       sendJSON(res, 500, { error: e.message });
@@ -579,6 +620,7 @@ const server = http.createServer(async (req, res) => {
     const id = url.pathname.split('/')[3];
     if (Recorder.isRecording(id)) {
       await Recorder.stop(id);
+      DanmakuManager.stop(id);
       Store.updateStreamer(id, { recording: false });
       sendJSON(res, 200, { ok: true });
     } else {
@@ -625,6 +667,7 @@ const server = http.createServer(async (req, res) => {
     const streamer = Store.getStreamers().find(s => s.id === id);
     const streamerName = streamer ? streamer.name : null;
     if (Recorder.isRecording(id)) await Recorder.stop(id);
+    DanmakuManager.stop(id);
     Store.removeStreamer(id);
     if (deleteFiles && streamerName) {
       const savePath = Store.getSettings().savePath;
@@ -738,7 +781,41 @@ const server = http.createServer(async (req, res) => {
     for (const [sid] of Object.entries(Recorder._processes)) {
       await Recorder.stop(sid);
     }
+    for (const [sid] of Object.entries(DanmakuManager._parsers)) {
+      DanmakuManager.stop(sid);
+    }
     process.exit(0);
+    return;
+  }
+
+  // ─── Highlight APIs ──────────────────────────────────────────────────────────
+
+  if (url.pathname === '/api/highlights' && req.method === 'GET') {
+    const streamerName = url.searchParams.get('streamerName');
+    const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+    if (!streamerName) { sendJSON(res, 400, { error: 'Missing streamerName' }); return; }
+    const data = HighlightStore.getAll(streamerName, date);
+    const dates = HighlightStore.listDates(streamerName);
+    sendJSON(res, 200, { ...data, availableDates: dates });
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/highlights/') && req.method === 'DELETE') {
+    const id = url.pathname.split('/').pop();
+    const streamerName = url.searchParams.get('streamerName');
+    const date = url.searchParams.get('date');
+    if (!streamerName || !date) { sendJSON(res, 400, { error: 'Missing streamerName or date' }); return; }
+    sendJSON(res, HighlightStore.remove(streamerName, date, id) ? 200 : 404, { ok: true });
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/highlights/') && req.method === 'PUT') {
+    const id = url.pathname.split('/').pop();
+    const body = await parseJSON(req);
+    const { streamerName, date, startOffset, endOffset } = body;
+    if (!streamerName || !date) { sendJSON(res, 400, { error: 'Missing streamerName or date' }); return; }
+    const updated = HighlightStore.update(streamerName, date, id, { startOffset, endOffset, duration: endOffset - startOffset });
+    sendJSON(res, updated ? 200 : 404, updated || { error: 'Not found' });
     return;
   }
 
