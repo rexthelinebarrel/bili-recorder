@@ -313,7 +313,7 @@ const DanmakuManager = {
     const parser = createDanmakuParser(roomId, logger);
     this._engines[streamerId] = engine;
     this._parsers[streamerId] = parser;
-    engine.setRecordingStart(Date.now());
+    engine.setRecordingStart(Date.now() / 1000);
 
     parser.on('danmaku', (d) => engine.feedDanmaku(d.text));
     parser.on('gift', (d) => engine.feedGift(d.rmb));
@@ -321,7 +321,11 @@ const DanmakuManager = {
     parser.on('close', () => logger.warn(`[danmaku] Parser closed for ${streamerName}`));
     parser.on('error', (d) => logger.warn(`[danmaku] Error for ${streamerName}: ${d.message}`));
 
-    parser.start().catch(e => logger.error(`[danmaku] Failed to start for ${streamerName}: ${e.message}`));
+    parser.start().catch(e => {
+      logger.error(`[danmaku] Failed to start for ${streamerName}: ${e.message}`);
+      delete this._parsers[streamerId];
+      delete this._engines[streamerId];
+    });
     logger.info(`[danmaku] Started for ${streamerName} (room ${roomId})`);
   },
 
