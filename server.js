@@ -317,6 +317,27 @@ const Recorder = {
 
 const AUTO_CLIP_TOP_N = 5;
 
+function findBestSourceFile(streamerName) {
+  const dir = path.join(Store.getSettings().savePath, streamerName);
+  let bestFile = null;
+  let bestSize = 0;
+  try {
+    if (!fs.existsSync(dir)) return null;
+    const files = fs.readdirSync(dir);
+    for (const f of files) {
+      if (!f.endsWith('.mp4') || f.includes('_clip_')) continue;
+      const fp = path.join(dir, f);
+      try {
+        const st = fs.statSync(fp);
+        if (st.size > bestSize) { bestSize = st.size; bestFile = fp; }
+      } catch {}
+    }
+  } catch {}
+  // Large file likely contains the full recording
+  if (bestFile && bestSize > 50 * 1024 * 1024) return bestFile;
+  return null;
+}
+
 async function autoClipAfterStream(streamerName, filePath) {
   if (!filePath || !fs.existsSync(filePath)) {
     logger.warn(`[auto-clip] File not found for ${streamerName}: ${filePath}`);
@@ -340,8 +361,22 @@ async function autoClipAfterStream(streamerName, filePath) {
   const clipDir = path.dirname(filePath);
   const srcExt = path.extname(filePath);
 
+  // Use largest recording file if given file is a short restart fragment
+  let mainFile = filePath;
+  try {
+    const srcSize = fs.statSync(filePath).size;
+    if (srcSize < 50 * 1024 * 1024) {
+      const fb = findBestSourceFile(streamerName);
+      if (fb) {
+        logger.info(`[auto-clip] Source too small (${(srcSize/1e6).toFixed(0)}MB), using ${path.basename(fb)}`);
+        mainFile = fb;
+      }
+    }
+  } catch {}
+
   for (const h of highlights) {
-    const clipName = path.basename(filePath, srcExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
+    const srcBase = path.basename(mainFile, srcExt);
+    const clipName = srcBase + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
     const clipPath = path.join(clipDir, clipName);
 
     try {
@@ -349,7 +384,7 @@ async function autoClipAfterStream(streamerName, filePath) {
         const args = [
           '-ss', String(h.startOffset),
           '-to', String(h.endOffset),
-          '-i', filePath,
+          '-i', mainFile,
           '-c', 'copy',
           '-avoid_negative_ts', 'make_zero',
           '-y', clipPath
@@ -1070,12 +1105,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Use largest recording file — avoids short restart fragments
+    let mainFile = filePath;
+    try {
+      const srcSize = fs.statSync(filePath).size;
+      // If source is tiny (< 50MB) but highlights need more, find the real recording
+      if (srcSize < 50 * 1024 * 1024) {
+        const fb = findBestSourceFile(streamerName);
+        if (fb) { mainFile = fb; logger.info(`[clip] Source too small (${(srcSize/1e6).toFixed(0)}MB), using ${path.basename(fb)}`); }
+      }
+    } catch {}
+
     const results = [];
     const clipDir = path.dirname(filePath);
 
     for (const h of toClip) {
-      const srcExt = path.extname(filePath);
-      const clipName = path.basename(filePath, srcExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
+      const srcExt = path.extname(mainFile);
+      const clipName = path.basename(mainFile, srcExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
       const clipPath = path.join(clipDir, clipName);
 
       try {
@@ -1083,7 +1129,7 @@ const server = http.createServer(async (req, res) => {
           const args = [
             '-ss', String(h.startOffset),
             '-to', String(h.endOffset),
-            '-i', filePath,
+            '-i', mainFile,
             '-c', 'copy',
             '-avoid_negative_ts', 'make_zero',
             '-y', clipPath
