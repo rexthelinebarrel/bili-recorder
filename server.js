@@ -195,6 +195,7 @@ const VIDEO_EXTS = new Set(['.flv', '.mkv', '.ts', '.mp4']);
 
 const Recorder = {
   _processes: {},
+  _lastExitedFile: {},  // streamerId -> filePath (preserved after ffmpeg exits)
 
   _ensureDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
@@ -245,6 +246,7 @@ const Recorder = {
         exited = true;
         if (this._processes[streamerId]) {
           logger.info(`[recorder] ffmpeg exited (code ${code}) for ${streamerName}`);
+          this._lastExitedFile[streamerId] = this._processes[streamerId].filePath;
         }
         delete this._processes[streamerId];
         if (!settled) {
@@ -272,11 +274,18 @@ const Recorder = {
     });
   },
 
+  getLastExitedFile(streamerId) {
+    const p = this._lastExitedFile[streamerId];
+    delete this._lastExitedFile[streamerId];
+    return p || null;
+  },
+
   async stop(streamerId) {
     const entry = this._processes[streamerId];
     if (!entry) return null;
     const { process: proc, filePath } = entry;
     delete this._processes[streamerId];
+    delete this._lastExitedFile[streamerId];
     // Write 'q' to stdin for graceful exit — ffmpeg finalizes MP4 moov atom
     try { proc.stdin.write('q'); } catch {}
     await new Promise((resolve) => {
@@ -319,7 +328,10 @@ const DanmakuManager = {
     parser.on('danmaku', (d) => engine.feedDanmaku(d.text));
     parser.on('gift', (d) => engine.feedGift(d.rmb));
     parser.on('guard', (d) => engine.feedGuard(d.guardLevel, d.guardName, d.rmb));
-    parser.on('close', () => logger.warn(`[danmaku] Parser closed for ${streamerName}`));
+    parser.on('close', () => {
+      logger.warn(`[danmaku] Parser closed for ${streamerName}`);
+      delete this._parsers[streamerId];
+    });
     parser.on('error', (d) => logger.warn(`[danmaku] Error for ${streamerName}: ${d.message}`));
 
     parser.start().catch(e => {
@@ -398,19 +410,21 @@ const Poller = {
         } else if (info.status === 'offline' && prevStatus === 'live') {
           // Just went offline
           logger.info(`[poller] ${s.name} (room ${s.roomId}) went OFFLINE`);
-          const wasRecording = Recorder.isRecording(s.id);
-          if (wasRecording) {
-            const stoppedFile = await Recorder.stop(s.id);
-            if (stoppedFile) {
-              logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
-              const engine = DanmakuManager.getEngine(s.id);
-              if (engine) {
-                try {
-                  const peaks = await analyzeAudio(stoppedFile, logger);
-                  if (peaks.length > 0) engine.feedAudioResult(peaks);
-                } catch (e) {
-                  logger.warn(`[audio] Analysis failed for ${s.name}: ${e.message}`);
-                }
+          let stoppedFile = null;
+          if (Recorder.isRecording(s.id)) {
+            stoppedFile = await Recorder.stop(s.id);
+          } else {
+            stoppedFile = Recorder.getLastExitedFile(s.id);
+          }
+          if (stoppedFile) {
+            logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
+            const engine = DanmakuManager.getEngine(s.id);
+            if (engine) {
+              try {
+                const peaks = await analyzeAudio(stoppedFile, logger);
+                if (peaks.length > 0) engine.feedAudioResult(peaks);
+              } catch (e) {
+                logger.warn(`[audio] Analysis failed for ${s.name}: ${e.message}`);
               }
             }
           }
@@ -427,12 +441,21 @@ const Poller = {
               try {
                 await Recorder.start(s.id, realRoomId, s.name, s.lastFilePath);
                 Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
+                if (!DanmakuManager.isRunning(s.id)) {
+                  DanmakuManager.start(s.id, s.name, realRoomId);
+                }
               } catch (e) {
                 logger.warn(`[recorder] Reconnect failed for ${s.name}: ${e.message}`);
               }
             } else {
               logger.warn(`[recorder] ${s.name} recorder dead >2min, giving up`);
               Store.updateStreamer(s.id, { status: 'offline', recording: false });
+            }
+          } else {
+            // Recorder healthy — keep lastLiveTime fresh so gap is accurate on ffmpeg exit
+            s.lastLiveTime = Date.now();
+            if (!DanmakuManager.isRunning(s.id) && s.realRoomId) {
+              DanmakuManager.start(s.id, s.name, s.realRoomId);
             }
           }
         }
