@@ -2,7 +2,7 @@
 // 等待指定秒数后，停止录制 → 获取高光 → 自动剪辑
 const http = require('http');
 
-const WAIT_SEC = parseInt(process.argv[2]) || 7200; // 默认 2 小时
+const WAIT_SEC = isNaN(parseInt(process.argv[2])) ? 7200 : parseInt(process.argv[2]);
 const STREAMER_ID = process.argv[3] || '1778749091207';
 const TOP_N = parseInt(process.argv[4]) || 5;
 const BASE = 'http://localhost:3456';

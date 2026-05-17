@@ -313,6 +313,62 @@ const Recorder = {
   }
 };
 
+// ─── Auto-clip after stream ends ──────────────────────────────────────────────
+
+const AUTO_CLIP_TOP_N = 5;
+
+async function autoClipAfterStream(streamerName, filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    logger.warn(`[auto-clip] File not found for ${streamerName}: ${filePath}`);
+    return;
+  }
+
+  const date = new Date().toISOString().slice(0, 10);
+  const data = HighlightStore.getAll(streamerName, date);
+  const highlights = (data.highlights || [])
+    .filter(h => !h.clipped)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, AUTO_CLIP_TOP_N);
+
+  if (highlights.length === 0) {
+    logger.info(`[auto-clip] No unclipped highlights for ${streamerName} on ${date}`);
+    return;
+  }
+
+  logger.info(`[auto-clip] Clipping ${highlights.length} highlights for ${streamerName}...`);
+
+  const clipDir = path.dirname(filePath);
+  const srcExt = path.extname(filePath);
+
+  for (const h of highlights) {
+    const clipName = path.basename(filePath, srcExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
+    const clipPath = path.join(clipDir, clipName);
+
+    try {
+      await new Promise((resolve, reject) => {
+        const args = [
+          '-ss', String(h.startOffset),
+          '-to', String(h.endOffset),
+          '-i', filePath,
+          '-c', 'copy',
+          '-avoid_negative_ts', 'make_zero',
+          '-y', clipPath
+        ];
+        const proc = spawn(FFMPEG_BIN, args, { stdio: 'ignore' });
+        proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)); });
+        proc.on('error', reject);
+      });
+
+      HighlightStore.update(streamerName, date, h.id, { clipped: true, clipFile: clipPath });
+      logger.info(`[auto-clip] ${clipName} (score=${h.score}, ${Math.floor(h.startOffset)}s-${Math.floor(h.endOffset)}s)`);
+    } catch (e) {
+      logger.error(`[auto-clip] Failed: ${h.id} — ${e.message}`);
+    }
+  }
+
+  logger.info(`[auto-clip] Done for ${streamerName}`);
+}
+
 // ─── REST Danmaku Poller (fallback when WebSocket can't receive danmaku) ────────
 const REST_DANMAKU_INTERVAL = 8_000;  // 8 seconds
 
@@ -413,9 +469,11 @@ const DanmakuManager = {
 
 const POLL_INTERVAL = 30_000;  // 30 seconds
 const RECONNECT_WINDOW = 2 * 60 * 1000;  // 2 minutes
+const OFFLINE_GRACE_PERIOD = 3 * 60 * 1000;  // 3 minutes — wait before confirming offline
 
 const Poller = {
   _timer: null,
+  _offlineSince: {},  // streamerId -> timestamp when first detected offline
 
   start() {
     this._timer = setInterval(() => this.check(), POLL_INTERVAL);
@@ -466,31 +524,13 @@ const Poller = {
           } catch (e) {
             logger.error(`[recorder] Failed to start for ${s.name}: ${e.message}`);
           }
-        } else if (info.status === 'offline' && prevStatus === 'live') {
-          // Just went offline
-          logger.info(`[poller] ${s.name} (room ${s.roomId}) went OFFLINE`);
-          let stoppedFile = null;
-          if (Recorder.isRecording(s.id)) {
-            stoppedFile = await Recorder.stop(s.id);
-          } else {
-            stoppedFile = Recorder.getLastExitedFile(s.id);
-          }
-          if (stoppedFile) {
-            logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
-            const engine = DanmakuManager.getEngine(s.id);
-            if (engine) {
-              try {
-                const peaks = await analyzeAudio(stoppedFile, logger);
-                if (peaks.length > 0) engine.feedAudioResult(peaks);
-              } catch (e) {
-                logger.warn(`[audio] Analysis failed for ${s.name}: ${e.message}`);
-              }
-            }
-          }
-          DanmakuManager.stop(s.id);
-          Store.updateStreamer(s.id, { status: 'offline', recording: false });
         } else if (info.status === 'live' && prevStatus === 'live') {
-          // Still live — check if ffmpeg died (reconnect)
+          // Still live — clear any pending offline (false alarm)
+          if (this._offlineSince[s.id]) {
+            logger.info(`[poller] ${s.name} back online — false alarm canceled`);
+            delete this._offlineSince[s.id];
+          }
+          // Check if ffmpeg died (reconnect)
           if (!Recorder.isRecording(s.id)) {
             const lastLive = s.lastLiveTime || 0;
             const gap = Date.now() - lastLive;
@@ -515,6 +555,51 @@ const Poller = {
             s.lastLiveTime = Date.now();
             if (!DanmakuManager.isRunning(s.id) && s.realRoomId) {
               DanmakuManager.start(s.id, s.name, s.realRoomId);
+            }
+          }
+        }
+
+        // ── Offline detection with grace period ──────────────────────────
+        // Don't immediately stop+clip — wait OFFLINE_GRACE_PERIOD to rule out brief hiccups
+
+        if (info.status === 'offline' && s.status === 'live') {
+          if (!this._offlineSince[s.id]) {
+            this._offlineSince[s.id] = Date.now();
+            logger.info(`[poller] ${s.name} went OFFLINE, waiting ${OFFLINE_GRACE_PERIOD / 60000}min to confirm...`);
+          }
+        }
+
+        // Check if grace period expired for any pending offline
+        if (this._offlineSince[s.id]) {
+          const elapsed = Date.now() - this._offlineSince[s.id];
+          if (elapsed >= OFFLINE_GRACE_PERIOD) {
+            logger.info(`[poller] ${s.name} confirmed offline after ${Math.round(elapsed / 1000)}s`);
+            delete this._offlineSince[s.id];
+
+            let stoppedFile = null;
+            if (Recorder.isRecording(s.id)) {
+              stoppedFile = await Recorder.stop(s.id);
+            } else {
+              stoppedFile = Recorder.getLastExitedFile(s.id);
+            }
+            if (stoppedFile) {
+              logger.info(`[recorder] Stopped recording: ${stoppedFile}`);
+              const engine = DanmakuManager.getEngine(s.id);
+              if (engine) {
+                try {
+                  const peaks = await analyzeAudio(stoppedFile, logger);
+                  if (peaks.length > 0) engine.feedAudioResult(peaks);
+                } catch (e) {
+                  logger.warn(`[audio] Analysis failed for ${s.name}: ${e.message}`);
+                }
+              }
+            }
+            DanmakuManager.stop(s.id);
+            RESTDanmakuPoller.stop(s.id);
+            Store.updateStreamer(s.id, { status: 'offline', recording: false });
+
+            if (stoppedFile) {
+              await autoClipAfterStream(s.name, stoppedFile);
             }
           }
         }
@@ -663,7 +748,7 @@ const server = http.createServer(async (req, res) => {
     const defaultFmt = Store.getSettings().format || 'flv';
     const s = { id: Date.now().toString(), roomId, name: roomId, status: 'offline', recording: false, quality: 'auto', format: defaultFmt };
     Store.addStreamer(s);
-    // Fetch name immediately
+    // Fetch name and live status immediately
     try {
       const info = await BiliAPI.getRoomInfo(roomId);
       // Merge any recordings left in old directory names
@@ -685,7 +770,23 @@ const server = http.createServer(async (req, res) => {
         } catch {}
       }
       s.name = info.name;
-      Store.updateStreamer(s.id, { name: info.name });
+      Store.updateStreamer(s.id, { name: info.name, realRoomId: info.roomId });
+
+      // If streamer is already live, start recording immediately
+      if (info.status === 'live') {
+        const realRoomId = info.roomId;
+        logger.info(`[add] ${s.name} is LIVE, starting recording immediately`);
+        s.status = 'live';
+        Store.updateStreamer(s.id, { status: 'live', lastLiveTime: Date.now(), realRoomId });
+        try {
+          const filePath = await Recorder.start(s.id, realRoomId, s.name);
+          logger.info(`[recorder] Started recording ${s.name} -> ${filePath}`);
+          Store.updateStreamer(s.id, { recording: true, lastFilePath: filePath });
+          DanmakuManager.start(s.id, s.name, realRoomId);
+        } catch (e) {
+          logger.error(`[recorder] Failed to start for ${s.name}: ${e.message}`);
+        }
+      }
     } catch {}
     sendJSON(res, 201, s);
     return;
@@ -728,8 +829,15 @@ const server = http.createServer(async (req, res) => {
         }
       }
       DanmakuManager.stop(id);
+      RESTDanmakuPoller.stop(id);
       Store.updateStreamer(id, { recording: false });
       sendJSON(res, 200, { ok: true });
+
+      // 手动停止录制也触发切片
+      if (stoppedFile) {
+        const s = Store.getStreamers().find(s => s.id === id);
+        if (s) await autoClipAfterStream(s.name, stoppedFile);
+      }
     } else {
       sendJSON(res, 400, { error: 'Not recording' });
     }
@@ -885,9 +993,27 @@ const server = http.createServer(async (req, res) => {
     sendJSON(res, 200, { ok: true });
     logger.info('Server shutting down by user request...');
     Poller.stop();
+
+    // Stop all recordings with audio analysis + auto-clip
     for (const [sid] of Object.entries(Recorder._processes)) {
-      await Recorder.stop(sid);
+      const stoppedFile = await Recorder.stop(sid);
+      const engine = DanmakuManager.getEngine(sid);
+      if (engine && stoppedFile) {
+        try {
+          const peaks = await analyzeAudio(stoppedFile, logger);
+          if (peaks.length > 0) engine.feedAudioResult(peaks);
+        } catch (e) {
+          logger.warn(`[audio] Analysis failed: ${e.message}`);
+        }
+      }
+      DanmakuManager.stop(sid);
+      RESTDanmakuPoller.stop(sid);
+      if (stoppedFile) {
+        const streamer = Store.getStreamers().find(s => s.id === sid);
+        if (streamer) await autoClipAfterStream(streamer.name, stoppedFile);
+      }
     }
+
     for (const [sid] of Object.entries(DanmakuManager._parsers)) {
       DanmakuManager.stop(sid);
     }
