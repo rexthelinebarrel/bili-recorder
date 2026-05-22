@@ -83,6 +83,17 @@ const Store = {
 
 Store.load();
 
+// Ensure emotionDict exists
+if (!Store._data.emotionDict) {
+  Store._data.emotionDict = {
+    laugh: ["哈哈", "笑死", "草", "www", "hhh", "笑死我了"],
+    surprise: ["？？", "卧槽", "啊？", "什么", "我去", "wc"],
+    praise: ["666", "牛逼", "太强了", "牛", "帅", "好强"],
+    mock: ["离谱", "逆天", "不愧是你", "就这", "典", "急"]
+  };
+  Store.save();
+}
+
 const BiliAPI = {
   _get(url) {
     return new Promise((resolve, reject) => {
@@ -196,6 +207,7 @@ const VIDEO_EXTS = new Set(['.flv', '.mkv', '.ts', '.mp4']);
 const Recorder = {
   _processes: {},
   _lastExitedFile: {},  // streamerId -> filePath (preserved after ffmpeg exits)
+  _streamStartTime: {}, // streamerId -> first recording start timestamp (seconds)
 
   _ensureDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
@@ -269,6 +281,10 @@ const Recorder = {
           filePath,
           startedAt: Date.now()
         };
+        // Set streamStartTime for first non-reuse start
+        if (!reusePath || !this._streamStartTime[streamerId]) {
+          this._streamStartTime[streamerId] = Date.now() / 1000;
+        }
         resolve(filePath);
       }, 3000);
     });
@@ -286,6 +302,7 @@ const Recorder = {
     const { process: proc, filePath } = entry;
     delete this._processes[streamerId];
     delete this._lastExitedFile[streamerId];
+    delete this._streamStartTime[streamerId];
     // Write 'q' to stdin for graceful exit — ffmpeg finalizes MP4 moov atom
     try { proc.stdin.write('q'); } catch {}
     await new Promise((resolve) => {
@@ -302,6 +319,10 @@ const Recorder = {
     return !!this._processes[streamerId];
   },
 
+  getStreamStartTime(streamerId) {
+    return this._streamStartTime[streamerId] || null;
+  },
+
   getRecordingInfo(streamerId) {
     const entry = this._processes[streamerId];
     if (!entry) return null;
@@ -313,6 +334,38 @@ const Recorder = {
   }
 };
 
+// ─── Baseline update ─────────────────────────────────────────────────────────
+
+function updateStreamerBaseline(streamerId, streamerName) {
+  const engine = DanmakuManager.getEngine(streamerId);
+  if (!engine) return;
+  const sessionStats = engine.getBaselineStats();
+  if (!sessionStats || sessionStats.mean === 0) return;
+
+  const streamer = Store.getStreamers().find(s => s.id === streamerId);
+  const old = (streamer && streamer.baseline) || {
+    meanDanmakuRate: 0,
+    stdDanmakuRate: 0,
+    sampleCount: 0
+  };
+
+  const alpha = 0.3;
+  const newMean = old.meanDanmakuRate * (1 - alpha) + sessionStats.mean * alpha;
+  const newStd = old.stdDanmakuRate * (1 - alpha) + sessionStats.std * alpha;
+  const newCount = old.sampleCount + 1;
+
+  Store.updateStreamer(streamerId, {
+    baseline: {
+      meanDanmakuRate: Math.round(newMean * 10000) / 10000,
+      stdDanmakuRate: Math.round(newStd * 10000) / 10000,
+      updatedAt: new Date().toISOString().slice(0, 10),
+      sampleCount: newCount
+    }
+  });
+
+  logger.info(`[baseline] Updated ${streamerName}: mean=${newMean.toFixed(3)} std=${newStd.toFixed(3)} n=${newCount}`);
+}
+
 // ─── Auto-clip after stream ends ──────────────────────────────────────────────
 
 const AUTO_CLIP_TOP_N = 5;
@@ -320,21 +373,24 @@ const AUTO_CLIP_TOP_N = 5;
 function findBestSourceFile(streamerName) {
   const dir = path.join(Store.getSettings().savePath, streamerName);
   let bestFile = null;
-  let bestSize = 0;
+  let bestScore = 0;
   try {
     if (!fs.existsSync(dir)) return null;
+    const todayStr = new Date().toISOString().slice(0, 10);
     const files = fs.readdirSync(dir);
     for (const f of files) {
       if (!f.endsWith('.mp4') || f.includes('_clip_')) continue;
       const fp = path.join(dir, f);
       try {
         const st = fs.statSync(fp);
-        if (st.size > bestSize) { bestSize = st.size; bestFile = fp; }
+        // Today's files get 10x weight to avoid cross-day fallback
+        const isToday = f.includes(todayStr);
+        const score = st.size * (isToday ? 10 : 1);
+        if (score > bestScore) { bestScore = score; bestFile = fp; }
       } catch {}
     }
   } catch {}
-  // Large file likely contains the full recording
-  if (bestFile && bestSize > 50 * 1024 * 1024) return bestFile;
+  if (bestFile && bestScore > 50 * 1024 * 1024) return bestFile;
   return null;
 }
 
@@ -465,13 +521,24 @@ const DanmakuManager = {
 
   start(streamerId, streamerName, roomId) {
     if (this._parsers[streamerId]) return;
-    const engine = createHighlightEngine(streamerId, streamerName, roomId, logger);
+    const emotionDict = Store._data.emotionDict || null;
+    const engine = createHighlightEngine(streamerId, streamerName, roomId, logger, emotionDict);
     const parser = createDanmakuParser(roomId, logger);
     this._engines[streamerId] = engine;
     this._parsers[streamerId] = parser;
-    engine.setRecordingStart(Date.now() / 1000);
 
-    parser.on('danmaku', (d) => engine.feedDanmaku(d.text));
+    // v2: use streamStartTime so offset doesn't reset on reconnect
+    const startTime = Recorder.getStreamStartTime(streamerId) || Date.now() / 1000;
+    engine.setRecordingStart(startTime);
+
+    // v2: load historical baseline
+    const streamer = Store.getStreamers().find(s => s.id === streamerId);
+    if (streamer && streamer.baseline && streamer.baseline.sampleCount > 0) {
+      engine.setBaseline(streamer.baseline);
+      logger.info(`[danmaku] Loaded baseline for ${streamerName} (n=${streamer.baseline.sampleCount}, mean=${streamer.baseline.meanDanmakuRate.toFixed(2)})`);
+    }
+
+    parser.on('danmaku', (d) => engine.feedDanmaku(d.text, d.uid));
     parser.on('gift', (d) => engine.feedGift(d.rmb));
     parser.on('guard', (d) => engine.feedGuard(d.guardLevel, d.guardName, d.rmb));
     parser.on('close', () => {
@@ -631,6 +698,7 @@ const Poller = {
             }
             DanmakuManager.stop(s.id);
             RESTDanmakuPoller.stop(s.id);
+            updateStreamerBaseline(s.id, s.name);
             Store.updateStreamer(s.id, { status: 'offline', recording: false });
 
             if (stoppedFile) {
@@ -865,6 +933,8 @@ const server = http.createServer(async (req, res) => {
       }
       DanmakuManager.stop(id);
       RESTDanmakuPoller.stop(id);
+      const s2 = Store.getStreamers().find(s => s.id === id);
+      if (s2) updateStreamerBaseline(id, s2.name);
       Store.updateStreamer(id, { recording: false });
       sendJSON(res, 200, { ok: true });
 
@@ -1043,6 +1113,8 @@ const server = http.createServer(async (req, res) => {
       }
       DanmakuManager.stop(sid);
       RESTDanmakuPoller.stop(sid);
+      const streamer2 = Store.getStreamers().find(s => s.id === sid);
+      if (streamer2) updateStreamerBaseline(sid, streamer2.name);
       if (stoppedFile) {
         const streamer = Store.getStreamers().find(s => s.id === sid);
         if (streamer) await autoClipAfterStream(streamer.name, stoppedFile);
@@ -1053,6 +1125,22 @@ const server = http.createServer(async (req, res) => {
       DanmakuManager.stop(sid);
     }
     process.exit(0);
+    return;
+  }
+
+  // ─── Emotion Dictionary API ─────────────────────────────────────────────────
+
+  if (url.pathname === '/api/emotion-dict' && req.method === 'GET') {
+    const dict = Store._data.emotionDict || {};
+    sendJSON(res, 200, dict);
+    return;
+  }
+
+  if (url.pathname === '/api/emotion-dict' && req.method === 'PUT') {
+    const body = await parseJSON(req);
+    Store._data.emotionDict = body;
+    Store.save();
+    sendJSON(res, 200, { ok: true });
     return;
   }
 
