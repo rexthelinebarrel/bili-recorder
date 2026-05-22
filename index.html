@@ -81,6 +81,9 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 .tag-gift{background:#FDE4C3;color:#A05B0A}
 .tag-audio{background:#D6ECFB;color:#2A6B9E}
 .tag-guard{background:#FDDEDE;color:#B52828}
+.tag-emotion{background:#D5F5E3;color:#1E8449}
+.tag-consensus{background:#F5EED8;color:#7D6608}
+.tag-accel{background:#E8DAEF;color:#6C3483}
 </style>
 </head>
 <body>
@@ -130,6 +133,13 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
   <label>保存路径</label>
   <input type="text" id="savePathInput">
   <button class="btn-sm" id="btnSavePath">保存</button>
+</div>
+<div class="settings-row" style="flex-direction:column;align-items:stretch;gap:4px">
+  <label style="cursor:pointer;user-select:none" onclick="var e=document.getElementById('emotionEditor');var t=this;e.style.display=e.style.display==='none'?'block':'none';t.textContent=e.style.display==='none'?'▶ 情绪词典':'▼ 情绪词典'">▶ 情绪词典</label>
+  <div id="emotionEditor" style="display:none">
+    <div style="font-size:10px;color:var(--text3);margin-bottom:6px">每行一个词，按类别分组。修改后自动保存。</div>
+    <div id="emotionEditorFields"></div>
+  </div>
 </div>
 
 <script>
@@ -275,6 +285,10 @@ async function refresh() {
   }
 
   document.getElementById('clock').textContent = '更新于 '+new Date().toLocaleTimeString('zh-CN');
+  if (Object.keys(emotionDict).length === 0) {
+    await loadEmotionDict();
+    renderEmotionEditor();
+  }
   refreshHighlights();
 }
 
@@ -373,6 +387,36 @@ document.getElementById('btnSavePath').addEventListener('click', async () => {
   showToast('保存路径已更新');
 });
 
+let emotionDict = {};
+
+async function loadEmotionDict() {
+  try {
+    const r = await API.get('/api/emotion-dict');
+    if (r && !r.error) emotionDict = r;
+  } catch { emotionDict = {}; }
+}
+
+function renderEmotionEditor() {
+  const container = document.getElementById('emotionEditorFields');
+  const labels = { laugh: '笑', surprise: '惊', praise: '赞', mock: '嘲' };
+  container.innerHTML = Object.entries(emotionDict).map(([cat, words]) => {
+    const text = Array.isArray(words) ? words.join('\n') : '';
+    return '<div style="margin-bottom:10px">' +
+      '<div style="font-size:11px;color:var(--text2);margin-bottom:3px;font-weight:600">' + (labels[cat] || cat) + ' (' + cat + ')</div>' +
+      '<textarea data-cat="' + cat + '" onchange="saveEmotionDict()" onblur="saveEmotionDict()" style="width:100%;height:60px;padding:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-family:var(--font-ui);resize:vertical;outline:none">' + text + '</textarea>' +
+    '</div>';
+  }).join('');
+}
+
+async function saveEmotionDict() {
+  const newDict = {};
+  document.querySelectorAll('#emotionEditorFields textarea').forEach(ta => {
+    const cat = ta.dataset.cat;
+    newDict[cat] = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  });
+  await API.put('/api/emotion-dict', newDict);
+  emotionDict = newDict;
+}
 
 let highlightData = { highlights: [], availableDates: [] };
 let selectedHighlightIds = new Set();
@@ -439,13 +483,21 @@ function renderHighlightList() {
   list.innerHTML = hl.map(h => {
     const tagHTML = (h.triggers || []).map(t => {
       const cls = t === 'danmaku_peak' || t === 'danmaku_super_peak' || t === 'keyword_flood' ? 'tag-danmaku' :
+                  t === 'emotion_burst' ? 'tag-emotion' :
+                  t === 'consensus' ? 'tag-consensus' :
+                  t === 'accel_spike' ? 'tag-accel' :
+                  t === 'composite' ? 'tag-danmaku' :
                   t === 'gift_burst' ? 'tag-gift' :
                   t === 'guard_buy' ? 'tag-guard' :
                   t === 'audio_peak' ? 'tag-audio' : '';
       const label = t === 'danmaku_peak' ? '弹幕峰值' :
                     t === 'danmaku_super_peak' ? '超级峰值' :
-                    t === 'keyword_flood' ? '关键词刷屏' :
-                    t === 'gift_burst' ? '礼物轰炸' :
+                    t === 'keyword_flood' ? '关键词' :
+                    t === 'emotion_burst' ? '情绪爆发' :
+                    t === 'consensus' ? '观众共鸣' :
+                    t === 'accel_spike' ? '弹幕涌入' :
+                    t === 'composite' ? '综合高光' :
+                    t === 'gift_burst' ? '礼物' :
                     t === 'guard_buy' ? '大航海' :
                     t === 'audio_peak' ? '音频高能' : t;
       return '<span class="tag ' + cls + '">' + label + '</span>';
@@ -460,7 +512,10 @@ function renderHighlightList() {
       '<input type="checkbox" class="hl-check" ' + (selected ? 'checked ' : '') + 'onclick="event.stopPropagation();toggleHighlight(\'' + h.id + '\', this.parentElement)" style="pointer-events:auto">' +
       '<div class="hl-info">' +
         '<div class="hl-title">' + formatOffset(h.startOffset) + '–' + formatOffset(h.endOffset) + ' ' + tagHTML + clippedBadge + clipLink + '</div>' +
-        '<div class="hl-meta">持续' + Math.round(h.duration) + 's · 弹幕' + (h.danmakuCount || 0) + '条 · 礼物¥' + (h.totalGiftValue || 0) + '</div>' +
+        '<div class="hl-meta">' +
+          (h.emotionScore !== undefined ? '情绪' + Math.round(h.emotionScore * 100) + '% · ' : '') +
+          (h.consistencyScore !== undefined ? '共鸣' + Math.round(h.consistencyScore * 100) + '% · ' : '') +
+          '持续' + Math.round(h.duration) + 's · 弹幕' + (h.danmakuCount || 0) + '条 · 礼物¥' + (h.totalGiftValue || 0) + '</div>' +
       '</div>' +
       '<div class="hl-score ' + scoreClass + '">' + (h.score * 100).toFixed(0) + '%</div>' +
     '</div>';
@@ -575,8 +630,12 @@ async function clipSelected() {
   await refreshHighlights();
 }
 
-refresh();
-setInterval(refresh, 30000);
+(async () => {
+  await loadEmotionDict();
+  renderEmotionEditor();
+  refresh();
+  setInterval(refresh, 30000);
+})();
 </script>
 </body>
 </html>
