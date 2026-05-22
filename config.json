@@ -1,0 +1,68 @@
+{
+  "streamers": [
+    {
+      "id": "1778748173666",
+      "roomId": "1163043",
+      "name": "人形鹿头自走炮",
+      "status": "live",
+      "recording": true,
+      "lastLiveTime": 1779454277703,
+      "realRoomId": "1163043",
+      "lastFilePath": "D:\\rex\\bili-recorder\\recordings\\人形鹿头自走炮\\人形鹿头自走炮_2026-05-22T12-51-12.mp4",
+      "quality": "auto",
+      "format": "mp4",
+      "baseline": {
+        "meanDanmakuRate": 0,
+        "stdDanmakuRate": 0,
+        "updatedAt": null,
+        "sampleCount": 0
+      }
+    },
+    {
+      "id": "1778749091207",
+      "roomId": "31001522",
+      "name": "尽力局局长老二",
+      "status": "offline",
+      "recording": false,
+      "quality": "auto",
+      "format": "mp4",
+      "lastLiveTime": 1779260546230,
+      "realRoomId": "31001522",
+      "lastFilePath": "D:\\rex\\bili-recorder\\recordings\\尽力局局长老二\\尽力局局长老二_2026-05-20T07-02-19.mp4",
+      "baseline": {
+        "meanDanmakuRate": 0,
+        "stdDanmakuRate": 0,
+        "updatedAt": null,
+        "sampleCount": 0
+      }
+    },
+    {
+      "id": "1779003231147",
+      "roomId": "21272532",
+      "name": "真夜みやこ",
+      "status": "offline",
+      "recording": false,
+      "quality": "auto",
+      "format": "mp4",
+      "lastLiveTime": 1779197748619,
+      "realRoomId": "21272532",
+      "baseline": {
+        "meanDanmakuRate": 0,
+        "stdDanmakuRate": 0,
+        "updatedAt": null,
+        "sampleCount": 0
+      },
+      "lastFilePath": "D:\\rex\\bili-recorder\\recordings\\真夜みやこ\\真夜みやこ_2026-05-19T13-35-48.mp4"
+    }
+  ],
+  "emotionDict": {
+    "laugh": ["哈哈", "笑死", "草", "www", "hhh", "笑死我了", "xs", "hhhh"],
+    "surprise": ["？？", "卧槽", "啊？", "什么", "我去", "wc", "?？", "???"],
+    "praise": ["666", "牛逼", "太强了", "牛", "帅", "好强", "nb", "太牛了"],
+    "mock": ["离谱", "逆天", "不愧是你", "就这", "典", "急", "幽默", "抽象"]
+  },
+  "settings": {
+    "savePath": "D:\\rex\\bili-recorder\\recordings",
+    "format": "mp4"
+  }
+}
