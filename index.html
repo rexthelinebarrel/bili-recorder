@@ -515,7 +515,9 @@ function renderHighlightList() {
         '<div class="hl-meta">' +
           (h.emotionScore !== undefined ? '情绪' + Math.round(h.emotionScore * 100) + '% · ' : '') +
           (h.consistencyScore !== undefined ? '共鸣' + Math.round(h.consistencyScore * 100) + '% · ' : '') +
-          '持续' + Math.round(h.duration) + 's · 弹幕' + (h.danmakuCount || 0) + '条 · 礼物¥' + (h.totalGiftValue || 0) + '</div>' +
+          '持续' + Math.round(h.duration) + 's · 弹幕' + (h.danmakuCount || 0) + '条 · 礼物¥' + (h.totalGiftValue || 0) +
+          (h.danmakuSnapshot && h.danmakuSnapshot.length ? ' · <span style="color:var(--text3)" title="' + h.danmakuSnapshot.slice(0, 20).join(', ').replace(/"/g, '&quot;') + '">' + h.danmakuSnapshot.slice(0, 5).join(' ').slice(0, 80) + '</span>' : '') +
+          '</div>' +
       '</div>' +
       '<div class="hl-score ' + scoreClass + '">' + (h.score * 100).toFixed(0) + '%</div>' +
     '</div>';
