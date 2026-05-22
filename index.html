@@ -224,7 +224,7 @@ async function refresh() {
           <span class="card-name">${s.name}</span>
           <span class="badge badge-live">直播中</span>
         </div>
-        <div class="card-meta">房间 ${s.roomId} · ${s.recording ? '<span style="color:var(--live)">● 录制中</span>' : '<span style="color:var(--warn)">○ 未在录制</span>'} · 画质 <select onchange="changeQuality('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="auto"${(s.quality||'auto')==='auto'?' selected':''}>原画</option><option value="high"${s.quality==='high'?' selected':''}>高清</option><option value="medium"${s.quality==='medium'?' selected':''}>标清</option><option value="low"${s.quality==='low'?' selected':''}>流畅</option></select> · <select onchange="changeFormat('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="flv"${(s.format||'flv')==='flv'?' selected':''}>FLV</option><option value="mkv"${s.format==='mkv'?' selected':''}>MKV</option><option value="ts"${s.format==='ts'?' selected':''}>TS</option><option value="mp4"${s.format==='mp4'?' selected':''}>MP4</option></select> <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
+        <div class="card-meta">房间 ${s.roomId} · ${s.recording ? '<span style="color:var(--live)">● 录制中</span>' : '<span style="color:var(--warn)">○ 未在录制</span>'} · 画质 <select onchange="changeQuality('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="auto"${(s.quality||'auto')==='auto'?' selected':''}>原画</option><option value="high"${s.quality==='high'?' selected':''}>高清</option><option value="medium"${s.quality==='medium'?' selected':''}>标清</option><option value="low"${s.quality==='low'?' selected':''}>流畅</option></select> · <select onchange="changeFormat('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="flv"${(s.format||'flv')==='flv'?' selected':''}>FLV</option><option value="mkv"${s.format==='mkv'?' selected':''}>MKV</option><option value="ts"${s.format==='ts'?' selected':''}>TS</option><option value="mp4"${s.format==='mp4'?' selected':''}>MP4</option></select> <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a> <span onclick="openStreamerDict('${s.id}','${s.name.replace(/'/g,"\\'")}')" style="color:var(--text3);cursor:pointer;margin-left:2px;font-size:10px" title="编辑专属词典">📝</span></div>
         ${s.recording ? '<div class="progress-line" style="width:100%"></div>' : ''}
         <div class="card-actions" style="margin-top:8px">
           ${s.recording
@@ -247,7 +247,7 @@ async function refresh() {
           <span class="card-name">${s.name}</span>
           <span class="badge badge-off">离线</span>
         </div>
-        <div class="card-meta">房间 ${s.roomId} · 画质 <select onchange="changeQuality('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="auto"${(s.quality||'auto')==='auto'?' selected':''}>原画</option><option value="high"${s.quality==='high'?' selected':''}>高清</option><option value="medium"${s.quality==='medium'?' selected':''}>标清</option><option value="low"${s.quality==='low'?' selected':''}>流畅</option></select> · <select onchange="changeFormat('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="flv"${(s.format||'flv')==='flv'?' selected':''}>FLV</option><option value="mkv"${s.format==='mkv'?' selected':''}>MKV</option><option value="ts"${s.format==='ts'?' selected':''}>TS</option><option value="mp4"${s.format==='mp4'?' selected':''}>MP4</option></select> <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a></div>
+        <div class="card-meta">房间 ${s.roomId} · 画质 <select onchange="changeQuality('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="auto"${(s.quality||'auto')==='auto'?' selected':''}>原画</option><option value="high"${s.quality==='high'?' selected':''}>高清</option><option value="medium"${s.quality==='medium'?' selected':''}>标清</option><option value="low"${s.quality==='low'?' selected':''}>流畅</option></select> · <select onchange="changeFormat('${s.id}',this.value)" style="font-size:11px;padding:1px 4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-family:var(--font-ui);cursor:pointer"><option value="flv"${(s.format||'flv')==='flv'?' selected':''}>FLV</option><option value="mkv"${s.format==='mkv'?' selected':''}>MKV</option><option value="ts"${s.format==='ts'?' selected':''}>TS</option><option value="mp4"${s.format==='mp4'?' selected':''}>MP4</option></select> <a href="https://live.bilibili.com/${s.roomId}" target="_blank" style="color:var(--text3);text-decoration:none;margin-left:4px" title="打开直播间">↗</a> <span onclick="openStreamerDict('${s.id}','${s.name.replace(/'/g,"\\'")}')" style="color:var(--text3);cursor:pointer;margin-left:2px;font-size:10px" title="编辑专属词典">📝</span></div>
         <div class="card-actions" style="margin-top:4px">
           <button class="btn-sm" style="color:var(--live);border-color:var(--live)" onclick="quickClip('${s.name.replace(/'/g,"\\'")}','${s.id}')">🎬 切片</button>
           <button class="btn-sm danger" onclick="removeStreamer('${s.id}','${s.name.replace(/'/g,"\\'")}')">删除</button>
@@ -638,6 +638,63 @@ async function clipSelected() {
   refresh();
   setInterval(refresh, 30000);
 })();
+
+// ── Per-streamer emotion dict ────────────────────────────────────────────────
+
+let streamerDictId = null;
+
+async function openStreamerDict(id, name) {
+  streamerDictId = id;
+  let dict = null;
+  try { dict = await API.get('/api/streamer/' + id + '/emotion-dict'); } catch {}
+  const modal = document.getElementById('streamerDictModal');
+  document.getElementById('streamerDictTitle').textContent = name + ' 专属情绪词典';
+  const container = document.getElementById('streamerDictFields');
+  const labels = { laugh: '笑', surprise: '惊', praise: '赞', mock: '嘲' };
+  const categories = ['laugh', 'surprise', 'praise', 'mock'];
+  container.innerHTML = categories.map(cat => {
+    const words = (dict && dict[cat]) ? dict[cat].join('\n') : '';
+    return '<div style="margin-bottom:10px">' +
+      '<div style="font-size:11px;color:var(--text2);margin-bottom:3px;font-weight:600">' + (labels[cat] || cat) + ' (' + cat + ')</div>' +
+      '<textarea data-cat="' + cat + '" style="width:100%;height:55px;padding:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-family:var(--font-ui);resize:vertical;outline:none">' + words + '</textarea>' +
+    '</div>';
+  }).join('');
+  modal.style.display = 'flex';
+}
+
+async function saveStreamerDict() {
+  const newDict = {};
+  document.querySelectorAll('#streamerDictFields textarea').forEach(ta => {
+    const cat = ta.dataset.cat;
+    const words = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (words.length > 0) newDict[cat] = words;
+  });
+  await API.put('/api/streamer/' + streamerDictId + '/emotion-dict', newDict);
+  document.getElementById('streamerDictModal').style.display = 'none';
+  showToast('主播词典已保存');
+}
+
+function clearStreamerDict() {
+  if (!confirm('确定清除专属词典？将恢复使用全局词典。')) return;
+  API.put('/api/streamer/' + streamerDictId + '/emotion-dict', {});
+  document.getElementById('streamerDictModal').style.display = 'none';
+  showToast('已恢复全局词典');
+}
 </script>
+<div id="streamerDictModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--card);border:1px solid var(--border);padding:20px;max-width:400px;width:90%;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span id="streamerDictTitle" style="font-weight:700;font-size:14px"></span>
+      <span onclick="document.getElementById('streamerDictModal').style.display='none'" style="cursor:pointer;color:var(--text3);font-size:16px">✕</span>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-bottom:8px">留空则使用全局词典。每行一个词。</div>
+    <div id="streamerDictFields"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn primary" onclick="saveStreamerDict()" style="font-size:12px">保存</button>
+      <button class="btn-sm danger" onclick="clearStreamerDict()">清除专属词典</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

@@ -521,7 +521,8 @@ const DanmakuManager = {
 
   start(streamerId, streamerName, roomId) {
     if (this._parsers[streamerId]) return;
-    const emotionDict = Store._data.emotionDict || null;
+    const streamer = Store.getStreamers().find(s => s.id === streamerId);
+    const emotionDict = (streamer && streamer.emotionDict) || Store._data.emotionDict || null;
     const engine = createHighlightEngine(streamerId, streamerName, roomId, logger, emotionDict);
     const parser = createDanmakuParser(roomId, logger);
     this._engines[streamerId] = engine;
@@ -532,7 +533,6 @@ const DanmakuManager = {
     engine.setRecordingStart(startTime);
 
     // v2: load historical baseline
-    const streamer = Store.getStreamers().find(s => s.id === streamerId);
     if (streamer && streamer.baseline && streamer.baseline.sampleCount > 0) {
       engine.setBaseline(streamer.baseline);
       logger.info(`[danmaku] Loaded baseline for ${streamerName} (n=${streamer.baseline.sampleCount}, mean=${streamer.baseline.meanDanmakuRate.toFixed(2)})`);
@@ -962,6 +962,24 @@ const server = http.createServer(async (req, res) => {
     s.quality = quality;
     Store.updateStreamer(id, { quality });
     sendJSON(res, 200, { ok: true, quality });
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/emotion-dict') && req.method === 'GET') {
+    const id = url.pathname.split('/')[3];
+    const s = Store.getStreamers().find(s => s.id === id);
+    if (!s) { sendJSON(res, 404, { error: 'Streamer not found' }); return; }
+    sendJSON(res, 200, s.emotionDict || null);
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/streamer/') && url.pathname.endsWith('/emotion-dict') && req.method === 'PUT') {
+    const id = url.pathname.split('/')[3];
+    const s = Store.getStreamers().find(s => s.id === id);
+    if (!s) { sendJSON(res, 404, { error: 'Streamer not found' }); return; }
+    const body = await parseJSON(req);
+    Store.updateStreamer(id, { emotionDict: body });
+    sendJSON(res, 200, { ok: true });
     return;
   }
 
