@@ -50,7 +50,7 @@ echo.
 if %OK% EQU 1 (
     echo ============================================
     echo   ✅ 环境检查通过！可以启动录制助手：
-    echo     双击 start.bat 或在终端运行 node server.js
+    echo     双击 start-server.bat 或在终端运行 node server.js
     echo     浏览器打开 http://localhost:3456
     echo ============================================
 ) else (

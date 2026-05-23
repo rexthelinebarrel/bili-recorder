@@ -23,10 +23,7 @@ cd bili-recorder
 双击 setup-check.bat
 
 # 3. 启动
-双击 start.bat
-
-# 4. 打开浏览器
-http://localhost:3456
+双击 start-server.bat
 ```
 
 ## 使用说明
@@ -60,7 +57,7 @@ http://localhost:3456
 - 超过 2 分钟放弃，下次开播开新文件
 
 ### 后台运行
-`start.bat` 启动后关闭 CMD 窗口即可停止。建议保持窗口最小化。
+`start-server.bat` 启动后关闭 CMD 窗口即可停止。建议保持窗口最小化。
 
 ## 画质说明
 
@@ -118,7 +115,7 @@ A: MP4 的 moov atom 在录制结束后才写入。录制中播放会弹出提�
 A: 在主播卡片的画质下拉菜单中选「原画」。FLV/MKV/TS 是源流直存，画质 = B 站推流质量。MP4 格式选原画会使用 CRF 18。
 
 **Q: 服务意外停止？**
-A: 使用 `start.bat` 启动会自动重启。日志在 `app.log`。
+A: 重新运行 `start-server.bat` 即可重启。日志在 `app.log`。
 
 **Q: 添加主播后显示「房间XXXXXX」？**
 A: 等待 30 秒轮询后会自动更新为真实 B 站用户名。也可点击「立即检查」手动触发。
