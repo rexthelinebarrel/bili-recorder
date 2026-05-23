@@ -571,6 +571,7 @@ const DanmakuManager = {
 
 const POLL_INTERVAL = 30_000;  // 30 seconds
 const RECONNECT_WINDOW = 2 * 60 * 1000;  // 2 minutes
+const GIVEUP_BACKOFF = 10 * 60 * 1000;  // 10 minutes before retrying after giveup
 const OFFLINE_GRACE_PERIOD = 3 * 60 * 1000;  // 3 minutes — wait before confirming offline
 
 const Poller = {
@@ -634,23 +635,28 @@ const Poller = {
           }
           // Check if ffmpeg died (reconnect)
           if (!Recorder.isRecording(s.id)) {
-            const lastLive = s.lastLiveTime || 0;
-            const gap = Date.now() - lastLive;
-            if (gap <= RECONNECT_WINDOW) {
-              logger.warn(`[recorder] Reconnecting ${s.name} (gap: ${Math.round(gap/1000)}s, reusing file)`);
-              const realRoomId = s.realRoomId || info.roomId;
-              try {
-                await Recorder.start(s.id, realRoomId, s.name, s.lastFilePath);
-                Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now() });
-                if (!DanmakuManager.isRunning(s.id)) {
-                  DanmakuManager.start(s.id, s.name, realRoomId);
-                }
-              } catch (e) {
-                logger.warn(`[recorder] Reconnect failed for ${s.name}: ${e.message}`);
-              }
+            // If we already gave up recently, back off to avoid log spam
+            if (s.gaveUpAt && (Date.now() - s.gaveUpAt) < GIVEUP_BACKOFF) {
+              // still in backoff, skip reconnect attempt
             } else {
-              logger.warn(`[recorder] ${s.name} recorder dead >2min, giving up`);
-              Store.updateStreamer(s.id, { status: 'offline', recording: false });
+              const lastLive = s.lastLiveTime || 0;
+              const gap = Date.now() - lastLive;
+              if (gap <= RECONNECT_WINDOW) {
+                logger.warn(`[recorder] Reconnecting ${s.name} (gap: ${Math.round(gap/1000)}s, reusing file)`);
+                const realRoomId = s.realRoomId || info.roomId;
+                try {
+                  await Recorder.start(s.id, realRoomId, s.name, s.lastFilePath);
+                  Store.updateStreamer(s.id, { recording: true, lastLiveTime: Date.now(), gaveUpAt: null });
+                  if (!DanmakuManager.isRunning(s.id)) {
+                    DanmakuManager.start(s.id, s.name, realRoomId);
+                  }
+                } catch (e) {
+                  logger.warn(`[recorder] Reconnect failed for ${s.name}: ${e.message}`);
+                }
+              } else {
+                logger.warn(`[recorder] ${s.name} recorder dead >2min, giving up`);
+                Store.updateStreamer(s.id, { recording: false, gaveUpAt: Date.now() });
+              }
             }
           } else {
             // Recorder healthy — keep lastLiveTime fresh so gap is accurate on ffmpeg exit
