@@ -367,10 +367,10 @@ document.getElementById('btnCheck').addEventListener('click', async () => {
 });
 
 document.getElementById('btnShutdown').addEventListener('click', async () => {
-  if (!confirm('确定要关闭录制服务吗？\n\n关闭后将停止所有录制，需重新运行 start.bat 才能恢复。')) return;
+  if (!confirm('确定要关闭录制服务吗？\n\n关闭后将停止所有录制，需重新运行 start-server.bat 才能恢复。')) return;
   await API.post('/api/shutdown');
   showToast('服务已关闭');
-  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px">直播录制助手已关闭<br><br>重新启动请运行 start.bat</div>';
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px;text-align:center;line-height:2">直播录制助手已关闭<br>重新启动请运行 <b>start-server.bat</b></div>';
 });
 
 document.getElementById('btnAdd').addEventListener('click', async () => {
