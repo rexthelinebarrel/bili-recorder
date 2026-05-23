@@ -1098,6 +1098,27 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Open folder & select file in Explorer
+  if (url.pathname === '/api/open-folder' && req.method === 'POST') {
+    const body = await parseJSON(req);
+    const filePath = body.filePath;
+    if (!filePath) { sendJSON(res, 400, { error: 'Missing filePath' }); return; }
+    try {
+      const { execFile } = require('child_process');
+      if (process.platform === 'win32') {
+        execFile('explorer', ['/select,', filePath]);
+      } else if (process.platform === 'darwin') {
+        execFile('open', ['-R', filePath]);
+      } else {
+        execFile('xdg-open', [require('path').dirname(filePath)]);
+      }
+      sendJSON(res, 200, { ok: true });
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
+    return;
+  }
+
   if (url.pathname === '/api/recording' && req.method === 'DELETE') {
     const filePath = url.searchParams.get('filePath');
     if (!filePath) { sendJSON(res, 400, { error: 'Missing filePath' }); return; }

@@ -76,6 +76,9 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
 .hl-score{font-size:11px;font-weight:700;flex-shrink:0;text-align:center;min-width:36px}
 .hl-score.hot{color:#E8860C}
 .hl-score.wild{color:var(--danger)}
+.hl-clip-actions{display:inline-flex;gap:4px;margin-left:4px}
+.hl-clip-btn{font-size:10px;padding:1px 6px;border:1px solid var(--live);border-radius:4px;background:transparent;color:var(--live);cursor:pointer;font-family:var(--font-ui)}
+.hl-clip-btn:hover{background:var(--live);color:#fff}
 .tag{display:inline-block;padding:1px 6px;font-size:9px;font-weight:600;border-radius:2px;margin-right:3px}
 .tag-danmaku{background:#E8D5F5;color:#6B3FA0}
 .tag-gift{background:#FDE4C3;color:#A05B0A}
@@ -319,6 +322,11 @@ async function playFile(filePath) {
   else showToast(r.error || '打开失败');
 }
 
+async function showInFolder(filePath) {
+  const r = await API.post('/api/open-folder', { filePath });
+  if (!r.ok) showToast(r.error || '打开失败');
+}
+
 async function convertFile(filePath) {
   showToast('正在转换为 MKV...');
   const r = await API.post('/api/convert', { filePath });
@@ -516,17 +524,24 @@ function renderHighlightList() {
     const scoreClass = h.score >= 0.8 ? 'wild' : h.score >= 0.5 ? 'hot' : '';
     const selected = selectedHighlightIds.has(h.id) ? ' selected' : '';
     const clippedBadge = h.clipped ? ' <span style="color:var(--live);font-size:10px">已裁剪</span>' : '';
-    const clipLink = h.clipFile ? ' <span style="font-size:10px;color:var(--text3);cursor:pointer" onclick="event.stopPropagation();playFile(\'' + h.clipFile.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + '\')">▶播放</span>' : '';
+    const clipFileEscaped = h.clipFile ? h.clipFile.replace(/\\/g, '\\\\').replace(/'/g, "\\'") : '';
+    const clipActions = h.clipped && h.clipFile
+      ? ' <span class="hl-clip-actions">' +
+          '<button class="hl-clip-btn" onclick="event.stopPropagation();playFile(\'' + clipFileEscaped + '\')">▶ 播放</button>' +
+          '<button class="hl-clip-btn" onclick="event.stopPropagation();showInFolder(\'' + clipFileEscaped + '\')">📂 打开</button>' +
+        '</span>'
+      : '';
 
     return '<div class="hl-item' + selected + '" onclick="toggleHighlight(\'' + h.id + '\', this)">' +
       '<input type="checkbox" class="hl-check" ' + (selected ? 'checked ' : '') + 'onclick="event.stopPropagation();toggleHighlight(\'' + h.id + '\', this.parentElement)" style="pointer-events:auto">' +
       '<div class="hl-info">' +
-        '<div class="hl-title">' + formatOffset(h.startOffset) + '–' + formatOffset(h.endOffset) + ' ' + tagHTML + clippedBadge + clipLink + '</div>' +
+        '<div class="hl-title">' + formatOffset(h.startOffset) + '–' + formatOffset(h.endOffset) + ' ' + tagHTML + clippedBadge + '</div>' +
         '<div class="hl-meta">' +
           (h.emotionScore !== undefined ? '情绪' + Math.round(h.emotionScore * 100) + '% · ' : '') +
           (h.consistencyScore !== undefined ? '共鸣' + Math.round(h.consistencyScore * 100) + '% · ' : '') +
           '持续' + Math.round(h.duration) + 's · 弹幕' + (h.danmakuCount || 0) + '条 · 礼物¥' + (h.totalGiftValue || 0) +
           (h.danmakuSnapshot && h.danmakuSnapshot.length ? ' · <span style="color:var(--text3)" title="' + h.danmakuSnapshot.slice(0, 20).join(', ').replace(/"/g, '&quot;') + '">' + h.danmakuSnapshot.slice(0, 5).join(' ').slice(0, 80) + '</span>' : '') +
+          clipActions +
           '</div>' +
       '</div>' +
       '<div class="hl-score ' + scoreClass + '">' + (h.score * 100).toFixed(0) + '%</div>' +
