@@ -99,6 +99,7 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
   <div class="header-btns">
     <button class="btn" id="btnCheck">立即检查</button>
     <button class="btn" id="btnShutdown" style="color:var(--danger);border-color:var(--danger)">停止所有录制</button>
+    <button class="btn" id="btnExit" style="color:var(--danger);border-color:var(--danger);background:var(--danger);color:#fff">完全退出</button>
   </div>
 </div>
 
@@ -371,6 +372,12 @@ document.getElementById('btnShutdown').addEventListener('click', async () => {
   await API.post('/api/shutdown');
   showToast('录制已停止，切片已生成');
   setTimeout(refresh, 2000);
+});
+
+document.getElementById('btnExit').addEventListener('click', async () => {
+  if (!confirm('确定要完全退出吗？\n\n所有录制将停止并生成切片，然后服务进程将退出。下次需要重新运行 start-server.bat。')) return;
+  await API.post('/api/exit');
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px;text-align:center;line-height:2">录制助手已退出<br>关闭此页面即可</div>';
 });
 
 document.getElementById('btnAdd').addEventListener('click', async () => {
