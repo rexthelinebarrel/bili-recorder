@@ -1,3 +1,15 @@
+// ─── Global crash handlers (log before exit) ──────────────────────────────
+process.on('uncaughtException', (err) => {
+  const logger = require('./lib/logger');
+  logger.error(`[FATAL] uncaughtException: ${err.message}\n${err.stack}`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  const logger = require('./lib/logger');
+  logger.error(`[FATAL] unhandledRejection: ${reason}`);
+  process.exit(1);
+});
+
 const fs = require('fs');
 const path = require('path');
 const http = require('http');

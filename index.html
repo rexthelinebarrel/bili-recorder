@@ -98,7 +98,7 @@ h1{font-family:var(--font-display);font-size:22px;font-weight:700;margin-bottom:
   </div>
   <div class="header-btns">
     <button class="btn" id="btnCheck">立即检查</button>
-    <button class="btn" id="btnShutdown" style="color:var(--danger);border-color:var(--danger)">关闭服务</button>
+    <button class="btn" id="btnShutdown" style="color:var(--danger);border-color:var(--danger)">停止所有录制</button>
   </div>
 </div>
 
@@ -367,21 +367,10 @@ document.getElementById('btnCheck').addEventListener('click', async () => {
 });
 
 document.getElementById('btnShutdown').addEventListener('click', async () => {
-  if (!confirm('确定要停止所有录制吗？\n\n录制将停止并自动生成切片。服务会自动重启，浏览器也会自动恢复。')) return;
+  if (!confirm('确定要停止所有录制吗？\n\n录制将停止并自动生成高光切片。服务保持运行，可以随时重新开始。')) return;
   await API.post('/api/shutdown');
-  showToast('录制已停止，正在重启...');
-  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px;text-align:center;line-height:2">录制已停止，服务重启中...<br><span style="font-size:14px;color:var(--text3)" id="reconnectHint">等待服务恢复...</span></div>';
-  // Auto-reconnect: poll every 3s, refresh when server comes back
-  let attempts = 0;
-  const reconnectTimer = setInterval(async () => {
-    try {
-      const r = await fetch('/api/status');
-      if (r.ok) { clearInterval(reconnectTimer); location.reload(); return; }
-    } catch {}
-    attempts++;
-    const hint = document.getElementById('reconnectHint');
-    if (hint) hint.textContent = '等待服务恢复... (' + attempts + '次尝试)';
-  }, 3000);
+  showToast('录制已停止，切片已生成');
+  setTimeout(refresh, 2000);
 });
 
 document.getElementById('btnAdd').addEventListener('click', async () => {

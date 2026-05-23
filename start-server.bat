@@ -16,14 +16,4 @@ start http://localhost:3456
 echo.
 echo 服务运行中，关闭此窗口可停止服务。
 echo ============================================
-
-:loop
-timeout /t 10 /nobreak >nul
-netstat -ano 2>nul | find ":3456" | find "LISTENING" >nul
-if errorlevel 1 (
-    echo [%date% %time%] 服务中断，正在重启...
-    start /B node server.js
-    timeout /t 4 /nobreak >nul
-    echo 服务已恢复
-)
-goto loop
+pause >nul
