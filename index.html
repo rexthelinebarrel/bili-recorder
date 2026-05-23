@@ -367,10 +367,10 @@ document.getElementById('btnCheck').addEventListener('click', async () => {
 });
 
 document.getElementById('btnShutdown').addEventListener('click', async () => {
-  if (!confirm('确定要关闭录制服务吗？\n\n关闭后将停止所有录制，需重新运行 start-server.bat 才能恢复。')) return;
+  if (!confirm('确定要停止所有录制吗？\n\n录制将停止并自动生成切片。服务会自动重启，浏览器也会自动恢复。')) return;
   await API.post('/api/shutdown');
-  showToast('服务已关闭');
-  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px;text-align:center;line-height:2">直播录制助手已关闭<br>重新启动请运行 <b>start-server.bat</b><br><span style="font-size:14px;color:var(--text3)" id="reconnectHint">等待服务恢复中...</span></div>';
+  showToast('录制已停止，正在重启...');
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-family:var(--font-display);font-size:18px;text-align:center;line-height:2">录制已停止，服务重启中...<br><span style="font-size:14px;color:var(--text3)" id="reconnectHint">等待服务恢复...</span></div>';
   // Auto-reconnect: poll every 3s, refresh when server comes back
   let attempts = 0;
   const reconnectTimer = setInterval(async () => {
@@ -380,7 +380,7 @@ document.getElementById('btnShutdown').addEventListener('click', async () => {
     } catch {}
     attempts++;
     const hint = document.getElementById('reconnectHint');
-    if (hint) hint.textContent = '等待服务恢复中... (' + attempts + '次尝试)';
+    if (hint) hint.textContent = '等待服务恢复... (' + attempts + '次尝试)';
   }, 3000);
 });
 
