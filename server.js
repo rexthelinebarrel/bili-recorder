@@ -44,6 +44,14 @@ function migrateOrphanedDirs() {
 const server = http.createServer(handleRequest);
 const PORT = process.env.PORT || 3456;
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    logger.error(`Port ${PORT} is already in use. Close the existing server first, or run: taskkill /F /IM node.exe`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => {
   // Reset stale recording state from previous server run
   for (const s of Store.getStreamers()) {
