@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const { createDanmakuParser } = require('./lib/danmaku-parser');
 const { createHighlightEngine } = require('./lib/highlight-engine');
@@ -195,7 +195,8 @@ function getFfmpegArgs(streamUrl, filePath, format, quality) {
         low:   { crf: '28', preset: 'ultrafast' }
       };
       const q = qMap[quality] || qMap.auto;
-      return { ext: 'mp4', args: [...baseArgs, '-c:v', 'libx264', '-preset', q.preset, '-crf', q.crf, '-c:a', 'aac', '-f', 'mp4', '-y', filePath] };
+      // frag_keyframe+empty_moov: file stays playable even if ffmpeg is killed
+      return { ext: 'mp4', args: [...baseArgs, '-c:v', 'libx264', '-preset', q.preset, '-crf', q.crf, '-c:a', 'aac', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', '-y', filePath] };
     }
     default: // flv
       return { ext: 'flv', args: [...baseArgs, '-c', 'copy', '-f', 'flv', '-y', filePath] };
@@ -370,6 +371,13 @@ function updateStreamerBaseline(streamerId, streamerName) {
 
 const AUTO_CLIP_TOP_N = 5;
 
+// Quick probe to check if MP4 has a valid moov atom
+const FFPROBE_BIN = path.join(path.dirname(FFMPEG_BIN), 'ffprobe.exe');
+function isValidMP4(filePath) {
+  const r = spawnSync(FFPROBE_BIN, ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', filePath], { timeout: 10000 });
+  return r.status === 0;
+}
+
 function findBestSourceFile(streamerName) {
   const dir = path.join(Store.getSettings().savePath, streamerName);
   let bestFile = null;
@@ -378,20 +386,25 @@ function findBestSourceFile(streamerName) {
     if (!fs.existsSync(dir)) return null;
     const todayStr = new Date().toISOString().slice(0, 10);
     const files = fs.readdirSync(dir);
+    const candidates = [];
     for (const f of files) {
       if (!f.endsWith('.mp4') || f.includes('_clip_')) continue;
       const fp = path.join(dir, f);
       try {
         const st = fs.statSync(fp);
-        // Today's files get 10x weight to avoid cross-day fallback
         const isToday = f.includes(todayStr);
-        const score = st.size * (isToday ? 10 : 1);
-        if (score > bestScore) { bestScore = score; bestFile = fp; }
+        candidates.push({ fp, score: st.size * (isToday ? 10 : 1) });
       } catch {}
     }
+    // Sort by score descending, try until we find a valid one
+    candidates.sort((a, b) => b.score - a.score);
+    for (const c of candidates) {
+      if (c.score > 50 * 1024 * 1024 && isValidMP4(c.fp)) {
+        bestFile = c.fp; bestScore = c.score; break;
+      }
+    }
   } catch {}
-  if (bestFile && bestScore > 50 * 1024 * 1024) return bestFile;
-  return null;
+  return (bestFile && bestScore > 50 * 1024 * 1024) ? bestFile : null;
 }
 
 async function autoClipAfterStream(streamerName, filePath) {
@@ -419,42 +432,67 @@ async function autoClipAfterStream(streamerName, filePath) {
 
   // Use largest recording file if given file is a short restart fragment
   let mainFile = filePath;
+  const fallbackFiles = [];
   try {
     const srcSize = fs.statSync(filePath).size;
-    if (srcSize < 50 * 1024 * 1024) {
-      const fb = findBestSourceFile(streamerName);
-      if (fb) {
-        logger.info(`[auto-clip] Source too small (${(srcSize/1e6).toFixed(0)}MB), using ${path.basename(fb)}`);
-        mainFile = fb;
+    const dir = path.dirname(filePath);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const candidates = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.mp4') && !f.includes('_clip_'))
+      .map(f => path.join(dir, f))
+      .filter(fp => {
+        try { return fs.statSync(fp).size > 50 * 1024 * 1024; } catch { return false; }
+      })
+      .sort((a, b) => {
+        const sa = (a.includes(todayStr) ? 10 : 1) * fs.statSync(a).size;
+        const sb = (b.includes(todayStr) ? 10 : 1) * fs.statSync(b).size;
+        return sb - sa;
+      });
+    for (const fp of candidates) {
+      if (fp !== filePath && isValidMP4(fp)) fallbackFiles.push(fp);
+    }
+    if (srcSize < 50 * 1024 * 1024 || !isValidMP4(filePath)) {
+      if (fallbackFiles.length > 0) {
+        mainFile = fallbackFiles.shift();
+        logger.info(`[auto-clip] Switching source to ${path.basename(mainFile)}`);
       }
     }
   } catch {}
 
   for (const h of highlights) {
-    const srcBase = path.basename(mainFile, srcExt);
-    const clipName = srcBase + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
-    const clipPath = path.join(clipDir, clipName);
+    const filesToTry = [mainFile, ...fallbackFiles];
+    let clippingDone = false;
+    for (const tryFile of filesToTry) {
+      const tryExt = path.extname(tryFile);
+      const clipName = path.basename(tryFile, tryExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + tryExt;
+      const clipPath = path.join(clipDir, clipName);
 
-    try {
-      await new Promise((resolve, reject) => {
-        const args = [
-          '-ss', String(h.startOffset),
-          '-to', String(h.endOffset),
-          '-i', mainFile,
-          '-c', 'copy',
-          '-avoid_negative_ts', 'make_zero',
-          '-y', clipPath
-        ];
-        const proc = spawn(FFMPEG_BIN, args, { stdio: 'ignore' });
-        proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)); });
-        proc.on('error', reject);
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          const args = [
+            '-ss', String(h.startOffset),
+            '-to', String(h.endOffset),
+            '-i', tryFile,
+            '-c', 'copy',
+            '-avoid_negative_ts', 'make_zero',
+            '-y', clipPath
+          ];
+          const proc = spawn(FFMPEG_BIN, args, { stdio: 'ignore' });
+          proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)); });
+          proc.on('error', reject);
+        });
 
-      HighlightStore.update(streamerName, date, h.id, { clipped: true, clipFile: clipPath });
-      logger.info(`[auto-clip] ${clipName} (score=${h.score}, ${Math.floor(h.startOffset)}s-${Math.floor(h.endOffset)}s)`);
-    } catch (e) {
-      logger.error(`[auto-clip] Failed: ${h.id} — ${e.message}`);
+        HighlightStore.update(streamerName, date, h.id, { clipped: true, clipFile: clipPath });
+        logger.info(`[auto-clip] ${clipName} (score=${h.score}, ${Math.floor(h.startOffset)}s-${Math.floor(h.endOffset)}s)` + (tryFile !== mainFile ? ' [fallback]' : ''));
+        clippingDone = true;
+        break;
+      } catch (e) {
+        if (tryFile === filesToTry[filesToTry.length - 1]) {
+          logger.error(`[auto-clip] Failed: ${h.id} — ${e.message}`);
+        }
+      }
     }
+    if (!clippingDone) continue;
   }
 
   logger.info(`[auto-clip] Done for ${streamerName}`);
@@ -1240,12 +1278,31 @@ const server = http.createServer(async (req, res) => {
 
     // Use largest recording file — avoids short restart fragments
     let mainFile = filePath;
+    const fallbackFiles = [];
     try {
       const srcSize = fs.statSync(filePath).size;
-      // If source is tiny (< 50MB) but highlights need more, find the real recording
-      if (srcSize < 50 * 1024 * 1024) {
-        const fb = findBestSourceFile(streamerName);
-        if (fb) { mainFile = fb; logger.info(`[clip] Source too small (${(srcSize/1e6).toFixed(0)}MB), using ${path.basename(fb)}`); }
+      // Collect fallback files (valid, non-clip, sorted by size desc)
+      const dir = path.dirname(filePath);
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const candidates = fs.readdirSync(dir)
+        .filter(f => f.endsWith('.mp4') && !f.includes('_clip_'))
+        .map(f => path.join(dir, f))
+        .filter(fp => {
+          try { return fs.statSync(fp).size > 50 * 1024 * 1024; } catch { return false; }
+        })
+        .sort((a, b) => {
+          const sa = (a.includes(todayStr) ? 10 : 1) * fs.statSync(a).size;
+          const sb = (b.includes(todayStr) ? 10 : 1) * fs.statSync(b).size;
+          return sb - sa;
+        });
+      for (const fp of candidates) {
+        if (fp !== filePath && isValidMP4(fp)) fallbackFiles.push(fp);
+      }
+      if (srcSize < 50 * 1024 * 1024 || !isValidMP4(filePath)) {
+        if (fallbackFiles.length > 0) {
+          mainFile = fallbackFiles.shift();
+          logger.info(`[clip] Switching source to ${path.basename(mainFile)}`);
+        }
       }
     } catch {}
 
@@ -1257,28 +1314,41 @@ const server = http.createServer(async (req, res) => {
       const clipName = path.basename(mainFile, srcExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + srcExt;
       const clipPath = path.join(clipDir, clipName);
 
-      try {
-        await new Promise((resolve, reject) => {
-          const args = [
-            '-ss', String(h.startOffset),
-            '-to', String(h.endOffset),
-            '-i', mainFile,
-            '-c', 'copy',
-            '-avoid_negative_ts', 'make_zero',
-            '-y', clipPath
-          ];
-          const proc = spawn(FFMPEG_BIN, args, { stdio: 'ignore' });
-          proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)); });
-          proc.on('error', reject);
-        });
+      let clipped = false;
+      // Try mainFile first, then fallbacks
+      const filesToTry = [mainFile, ...fallbackFiles];
+      for (const tryFile of filesToTry) {
+        try {
+          const tryExt = path.extname(tryFile);
+          const tryClipName = path.basename(tryFile, tryExt) + '_clip_' + Math.floor(h.startOffset) + 's_' + Math.floor(h.endOffset) + 's' + tryExt;
+          const tryClipPath = path.join(clipDir, tryClipName);
+          await new Promise((resolve, reject) => {
+            const args = [
+              '-ss', String(h.startOffset),
+              '-to', String(h.endOffset),
+              '-i', tryFile,
+              '-c', 'copy',
+              '-avoid_negative_ts', 'make_zero',
+              '-y', tryClipPath
+            ];
+            const proc = spawn(FFMPEG_BIN, args, { stdio: 'ignore' });
+            proc.on('exit', (code) => { code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)); });
+            proc.on('error', reject);
+          });
 
-        HighlightStore.update(streamerName, date, h.id, { clipped: true, clipFile: clipPath });
-        results.push({ id: h.id, ok: true, clipFile: clipPath });
-        logger.info('[clip] ' + clipName + ' (' + Math.floor(h.startOffset) + 's-' + Math.floor(h.endOffset) + 's)');
-      } catch (e) {
-        results.push({ id: h.id, ok: false, error: e.message });
-        logger.error('[clip] Failed: ' + h.id + ' — ' + e.message);
+          HighlightStore.update(streamerName, date, h.id, { clipped: true, clipFile: tryClipPath });
+          results.push({ id: h.id, ok: true, clipFile: tryClipPath });
+          logger.info('[clip] ' + tryClipName + ' (' + Math.floor(h.startOffset) + 's-' + Math.floor(h.endOffset) + 's)' + (tryFile !== mainFile ? ' [fallback]' : ''));
+          clipped = true;
+          break;
+        } catch (e) {
+          if (tryFile === filesToTry[filesToTry.length - 1]) {
+            results.push({ id: h.id, ok: false, error: e.message });
+            logger.error('[clip] Failed: ' + h.id + ' — ' + e.message);
+          }
+        }
       }
+      if (!clipped) continue;
     }
 
     sendJSON(res, 200, { results });
