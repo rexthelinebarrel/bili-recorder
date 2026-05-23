@@ -456,6 +456,16 @@ async function refreshHighlights() {
     highlightData = await API.get(url);
   } catch { highlightData = { highlights: [], availableDates: [] }; }
 
+  // If current date has no highlights but other dates do, auto-switch to latest
+  const dates = highlightData.availableDates || [];
+  if (highlightData.highlights && highlightData.highlights.length === 0 && dates.length > 0) {
+    dateSel.value = dates[0];
+    try {
+      const url2 = '/api/highlights?streamerName=' + encodeURIComponent(streamerName) + '&date=' + dates[0];
+      highlightData = await API.get(url2);
+    } catch { highlightData = { highlights: [], availableDates: dates }; }
+  }
+
   document.getElementById('highlightsLabel').style.display = '';
   selectedHighlightIds.clear();
   renderHighlightList();
