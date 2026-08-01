@@ -115,3 +115,12 @@
 - `feedViewerCount(count)`：从空函数变为真正实现
 - `getStats()` 新增 `viewerCount` / `viewerScore` 字段
 - `BiliAPI.getRoomInfo` 返回新增 `online` 字段
+
+---
+
+# 扫尾检查修复（2026-08-01，同日）
+
+重构后复查发现两个 REST 弹幕通道的回归/隐患，已修复（38 个测试全过）：
+
+- **v3 刷屏限幅误伤 REST 通道（严重）**：REST 轮询 `feedDanmaku(m.text)` 不传 uid，所有弹幕 uid=0，会被"单 uid 每秒限 3 条"误判为同一用户刷屏——而 REST 是主力弹幕通道（WebSocket 已收不到 DANMU_MSG），且 gethistory 批量到达恰好落在同一秒。修复：uid 未知（falsy）时跳过限幅，并补回归测试。
+- **REST 弹幕无 uid 导致 cScore 恒为 0**：一致性分析按 uid 去重，uid 全 0 时任何文本组都只有 1 个"用户"，`consensus` 触发器在 REST 通道下永远不生效。修复：REST 轮询改传 `nickname` 作为用户标识（gethistory 返回该字段）。

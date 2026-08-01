@@ -83,6 +83,13 @@ test('single-uid spam is capped per second', () => {
   assert.strictEqual(engine.getStats().danmaku5s, 3);
 });
 
+test('unknown-uid (REST channel) danmaku is NOT capped', () => {
+  const engine = createHighlightEngine('t6b', '__test__', '123', nullLogger, null);
+  // REST gethistory 批量到达、无 uid——不能按"同一用户刷屏"限幅
+  for (let i = 0; i < 10; i++) engine.feedDanmaku('REST 弹幕' + i);
+  assert.strictEqual(engine.getStats().danmaku5s, 10);
+});
+
 // ─── v3: 情绪词典短词只在短弹幕中匹配 ───
 
 test('short emotion words do not match inside long texts', () => {

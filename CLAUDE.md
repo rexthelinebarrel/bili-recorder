@@ -76,11 +76,10 @@ B站 WebSocket 二进制协议：
 
 ## 当前状态
 
-- 16 commits ahead of origin/master
+- 已推送至 origin/master（d1d6af4，含四轮重构）
 - 3 个主播: 人形鹿头自走炮(1163043), 尽力局局长老二(31001522), 真夜みやこ(21272532)
-- WebSocket 弹幕收不到 DANMU_MSG，REST 降级稳定
-- 高光引擎主要触发 Rule 3 (弹幕超级高峰)，礼物/音频规则很少触发
-- 今日高光: 人形鹿头自走炮 1 个 (score 0.6, 3 条弹幕), 真夜みやこ 0 个
+- WebSocket 弹幕收不到 DANMU_MSG，REST 降级稳定（主力弹幕通道，传 nickname 当 uid 用）
+- 高光引擎 v3：多信号融合评分 + 观众数信号，切片走 segments.json 分片表墙钟映射
 
 ## 教训与陷阱
 
