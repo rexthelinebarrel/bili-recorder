@@ -442,11 +442,17 @@ function formatOffset(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
+// 本地时区 YYYY-MM-DD（toISOString().slice(0,10) 是 UTC 日期，早 8 点前会算成昨天）
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 async function refreshHighlights() {
   const sel = document.getElementById('hlStreamerSelect');
   const dateSel = document.getElementById('hlDateSelect');
   const streamerName = sel.value;
-  const date = dateSel.value || new Date().toISOString().slice(0, 10);
+  const date = dateSel.value || todayStr();
 
   // Always populate streamer dropdown from latest status
   try {
@@ -495,7 +501,7 @@ function renderHighlightList() {
   const dates = highlightData.availableDates || [];
   dateSel.innerHTML = dates.map(d => '<option value="' + d + '">' + d + '</option>').join('');
   if (dates.length === 0) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayStr();
     dateSel.innerHTML = '<option value="' + today + '">' + today + '</option>';
   }
 
@@ -599,7 +605,7 @@ async function quickClip(streamerName, streamerId) {
   if (!filePath) { showToast('找不到录制文件'); return; }
 
   // Fetch today's highlights
-  const date = new Date().toISOString().slice(0, 10);
+  const date = todayStr();
   let hlData;
   try {
     hlData = await API.get('/api/highlights?streamerName=' + encodeURIComponent(streamerName) + '&date=' + date);
@@ -634,7 +640,7 @@ async function clipSelected() {
   const sel = document.getElementById('hlStreamerSelect');
   const dateSel = document.getElementById('hlDateSelect');
   const streamerName = sel.value;
-  const date = dateSel.value || new Date().toISOString().slice(0, 10);
+  const date = dateSel.value || todayStr();
 
   // Find source file from recordings
   let filePath = null;

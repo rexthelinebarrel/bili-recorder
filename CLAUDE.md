@@ -4,7 +4,7 @@ B站直播自动录制 + 高光检测 + 自动切片。Node.js 服务器 + 原�
 
 ## 新对话快速上手路径
 
-1. **先读** `server.js` 头部（~1-170 行）了解 Store、BiliAPI、Recorder 结构
+1. **先读** `server.js`（仅启动引导，~90 行）+ `lib/api-router.js`（全部 HTTP 路由）
 2. **再读** `lib/highlight-engine.js` 了解高光检测规则
 3. **再读** `lib/danmaku-parser.js` 了解弹幕 WebSocket 协议
 4. **最后读** `index.html` 了解前端
@@ -13,27 +13,27 @@ B站直播自动录制 + 高光检测 + 自动切片。Node.js 服务器 + 原�
 ## 架构
 
 ```
-server.js (~1200 行)
-├── Logger          → app.log
-├── Store           → config.json (JSON 持久化, Object.assign 内存更新)
-├── BiliAPI         → B站 API 封装 (getRoomInfo, getStreamUrl, getDanmuInfo)
-├── Recorder        → ffmpeg 进程管理, _processes map, _lastExitedFile
-├── Poller          → 30s 轮询状态机, _offlineSince 宽限期
-├── DanmakuManager  → WebSocket + REST 双通道弹幕
-├── RESTDanmakuPoller → 8s 轮询 gethistory API 降级方案
-├── autoClipAfterStream → 下播/手动停止时自动切 top 5 高光
-├── findBestSourceFile  → 源文件 < 50MB 自动找最大录制文件
-├── HTTP Server     → REST API + index.html 静态服务
-└── auto-clip.js    → 独立手动切片脚本 (备用)
-
+server.js (~90 行) — 仅启动引导：崩溃处理、状态重置、目录迁移、HTTP listen
 lib/
-├── highlight-engine.js  → 多信号融合规则引擎
-├── highlight-store.js   → JSON 文件持久化 (每主播每天一个文件)
-├── danmaku-parser.js    → B站 WebSocket 弹幕客户端
-└── audio-analyzer.js    → ffmpeg silencedetect 音频分析
+├── api-router.js      → 全部 HTTP 路由（瘦身后只做参数校验+调度）
+├── store.js           → config.json 原子写持久化（tmp+rename，损坏自动备份 .bak）
+├── logger.js          → app.log
+├── bili-api.js        → B站 API 封装 (getRoomInfo, getStreamUrl, resolveRoomId)
+├── recorder.js        → ffmpeg 进程管理 (isWritingTo/activeIds 封装内部状态)
+├── poller.js          → 30s 轮询状态机, _offlineSince 宽限期
+├── danmaku-manager.js → WebSocket + REST 双通道弹幕管理
+├── danmaku-parser.js  → B站 WebSocket 弹幕二进制协议
+├── highlight-engine.js→ 多信号融合规则引擎
+├── highlight-store.js → 高光 JSON 持久化 (每主播每天一个文件)
+├── audio-analyzer.js  → ffmpeg silencedetect 音频分析
+├── clip.js            → 切片核心：pickSourceFiles / clipHighlight / autoClipAfterStream
+├── lifecycle.js       → 停录收尾统一流程：finalizeStreamer / cleanupAllRecordings
+└── utils.js           → localDate / mergeDirContents / isPathInside
 
+auto-clip.js           → 独立手动切片脚本 (备用)
 danmaku-diag.js        → WebSocket 诊断工具
 test-danmaku-rest.js   → REST API 测试工具
+test/                  → node:test 单测 (npm test)
 ```
 
 ## 高光引擎 (highlight-engine.js)
@@ -92,6 +92,8 @@ B站 WebSocket 二进制协议：
 8. **前端下拉框懒加载死循环** — populate 逻辑在 early return 之后。已修复：移到 return 之前
 9. **execSync 调 ffprobe 在 Windows 上不可靠** — 改用 fs.statSync 文件大小判断
 10. **B站 brotli v3 负载含嵌套二进制头** — 不能当纯 JSON 解析。用 `parseNestedPackets`
+11. **`toISOString().slice(0,10)` 是 UTC 日期** — 北京时间早 8 点前"今天"是昨天，高光会归错日期文件。一律用 `lib/utils.js` 的 `localDate()`（前端用 `todayStr()`）
+12. **API 的 filePath 必须校验在 savePath 之内** — CORS 已收紧为本机来源，但路径校验是最后防线，加新端点时用 `pathAllowed()`
 
 ## 未来改进方向 (brainstorm 过，未实现)
 
@@ -106,6 +108,7 @@ B站 WebSocket 二进制协议：
 
 ```powershell
 node server.js                           # 启动服务器
+npm test                                 # 运行 node:test 单测
 curl http://localhost:3456/api/status    # 查看状态
 node auto-clip.js 0 <streamerId> 5       # 手动切片
 tail -30 app.log                         # 看最近日志

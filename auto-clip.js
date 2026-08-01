@@ -55,8 +55,9 @@ async function main() {
     await new Promise(r => setTimeout(r, 15000)); // 等音频分析完成
   }
 
-  // 3. 获取高光数据
-  const date = new Date().toISOString().slice(0, 10);
+  // 3. 获取高光数据（本地时区日期，与服务端 localDate 保持一致）
+  const _d = new Date();
+  const date = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
   const encodedName = encodeURIComponent(streamerName);
   console.log(`[auto-clip] 获取高光: ${streamerName} ${date}`);
   const highlightData = await api('GET', `/api/highlights?streamerName=${encodedName}&date=${date}`);

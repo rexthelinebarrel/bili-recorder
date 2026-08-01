@@ -17,6 +17,7 @@ const logger = require('./lib/logger');
 const Store = require('./lib/store');
 const { handleRequest } = require('./lib/api-router');
 const { Poller } = require('./lib/poller');
+const { mergeDirContents } = require('./lib/utils');
 
 // ─── Migrate orphaned recording directories ─────────────────────────────────
 
@@ -31,16 +32,9 @@ function migrateOrphanedDirs() {
       for (const s of streamers) {
         if (dirName === s.name) break;
         if (dirName === s.roomId || dirName === '房间' + s.roomId) {
-          const oldDir = path.join(savePath, dirName);
-          const newDir = path.join(savePath, s.name);
           try {
-            fs.mkdirSync(newDir, { recursive: true });
-            const files = fs.readdirSync(oldDir);
-            for (const f of files) {
-              fs.renameSync(path.join(oldDir, f), path.join(newDir, f));
-            }
-            fs.rmdirSync(oldDir);
-            logger.info(`[migrate] Merged orphaned dir ${dirName} -> ${s.name} (${files.length} files)`);
+            const count = mergeDirContents(path.join(savePath, dirName), path.join(savePath, s.name));
+            if (count > 0) logger.info(`[migrate] Merged orphaned dir ${dirName} -> ${s.name} (${count} files)`);
           } catch (e) {
             logger.warn(`[migrate] Failed to merge ${dirName}: ${e.message}`);
           }
@@ -48,7 +42,9 @@ function migrateOrphanedDirs() {
         }
       }
     }
-  } catch {}
+  } catch (e) {
+    logger.warn(`[migrate] Failed to scan save dir: ${e.message}`);
+  }
 }
 
 // ─── Startup ────────────────────────────────────────────────────────────────
