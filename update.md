@@ -124,3 +124,32 @@
 
 - **v3 刷屏限幅误伤 REST 通道（严重）**：REST 轮询 `feedDanmaku(m.text)` 不传 uid，所有弹幕 uid=0，会被"单 uid 每秒限 3 条"误判为同一用户刷屏——而 REST 是主力弹幕通道（WebSocket 已收不到 DANMU_MSG），且 gethistory 批量到达恰好落在同一秒。修复：uid 未知（falsy）时跳过限幅，并补回归测试。
 - **REST 弹幕无 uid 导致 cScore 恒为 0**：一致性分析按 uid 去重，uid 全 0 时任何文本组都只有 1 个"用户"，`consensus` 触发器在 REST 通道下永远不生效。修复：REST 轮询改传 `nickname` 作为用户标识（gethistory 返回该字段）。
+
+---
+
+# 第五轮：真实直播间实测（2026-08-01）
+
+用血狼破军直播间（8432038，高能房间）实跑了完整链路（开播检测→录制→双通道弹幕→停录→音频分析→基线→自动切片），抓到并修复 6 个真实问题。测试 38→42 个，全部通过。
+
+## 根因级 bug：protobuf varint 死循环（生产事故级）
+
+**现象**：服务器运行几分钟后 OOM（4GB/分钟级增长）或 CPU 打满且事件循环冻结（HTTP 无响应、日志断流），间歇性发作。
+
+**定位过程**：CPU 采样（进程健康）→ 堆快照（健康）→ 二分禁用 WS 弹幕（恢复健康）→ 解压炸弹假设（64MB 上限无效，离线解压落盘负载 0ms 完成，排除）→ 离线复现 `decodePbStrings` 死循环。
+
+**根因**：`danmaku-parser.js` 的 protobuf length-delimited 字段解析用 `len |= (b & 0x7f) << shift` 累加 varint，shift≥32 时 JS 位移按 mod 32 环绕，算出**负数长度**，`offset += len` 倒退造成死循环。循环中 strings 数组无限增长 → OOM；原地空转 → CPU 打满。INTERACT_WORD_V2 消息的 pb 负载只在特定数据下触发，所以是间歇性的。
+
+**修复**：varint 改用浮点乘法累加（安全到 2^53）、超 10 字节判畸形、len 负值/越界即中止、外层加迭代保险丝。新增 4 个回归测试（含超长 varint、截断 varint、零长字段）。
+
+## 实测中修复的其他问题
+
+- **baseline 永不更新（存量 bug）**：`finalizeStreamer` 里 `updateStreamerBaseline` 在 `DanmakuManager.stop()` 之后调用，引擎已被删除、永远 early-return。已调整顺序，实测日志确认 `[baseline] Updated` 输出。
+- **segments.json 历史分片不闭合**：崩溃/强杀留下 `endTs: null` 的开口分片，墙钟映射会把新高光错配到最早的开口分片。修复：新分片开始时闭合所有旧开口分片。
+- **手动停止录制被 poller 撤销**：/stop 后 poller 在 2min 重连窗口内自动恢复录制。修复：/stop 时写 `gaveUpAt`，10min 退避期内不自动重连。
+- **REST 弹幕静默断流**：去重水位 `_lastTime` 只认字符串比较，置顶/预约消息的异常 timeline（未来时间）会污染水位，导致后续弹幕被永久去重且无日志。修复：timeline 格式校验 + 超当前时间 5min 丢弃 + gethistory code!=0 时节流日志。
+
+## 验证结果
+
+- 修复后浸泡：CPU ~0%，内存 72MB 稳定，弹幕连续流
+- 停录全链路：stop → 音频分析（10216 帧）→ baseline 更新 → 分片闭合 → auto-clip → 无自动重连 ✓
+- 事件循环冻结与 OOM 在修复后未再复现

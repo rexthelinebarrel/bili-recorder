@@ -96,6 +96,9 @@ B站 WebSocket 二进制协议：
 11. **`toISOString().slice(0,10)` 是 UTC 日期** — 北京时间早 8 点前"今天"是昨天，高光会归错日期文件。一律用 `lib/utils.js` 的 `localDate()`（前端用 `todayStr()`）
 12. **API 的 filePath 必须校验在 savePath 之内** — CORS 已收紧为本机来源，但路径校验是最后防线，加新端点时用 `pathAllowed()`
 13. **ffmpeg `-y` 是覆盖不是追加** — 重连"复用"同一文件路径会截断已录内容。重连必须录新分片文件，高光剪切靠 `segments.json` 分片表做墙钟映射（高光带 `peakTs`；音频高光带 `sourceFile`，其偏移是文件内偏移）
+14. **JS 位移运算只有 32 位** — `x << shift` 在 shift≥32 时按 mod 32 环绕。protobuf varint 解析用 `|=`/`<<` 累加会算出负数长度，`offset += len` 倒退 → 死循环（OOM 或 CPU 打满且事件循环冻结）。变长整数用浮点乘法累加 + 畸形校验（danmaku-parser decodePbStrings）
+15. **字符串水位去重要防异常值** — 一条未来时间戳/格式异常的消息就能污染水位导致永久断流。REST gethistory 的 timeline 已加格式+未来时间校验
+16. **点赞不是弹幕** — LIKE_INFO_V3_CLICK 在大房间是每秒数千条的洪水，喂给高光引擎会灌爆内存和 consistencyScore。只计数不进引擎
 
 ## 未来改进方向 (brainstorm 过，未实现)
 
