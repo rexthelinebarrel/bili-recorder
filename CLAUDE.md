@@ -25,7 +25,7 @@ lib/
 ├── danmaku-parser.js  → B站 WebSocket 弹幕二进制协议
 ├── highlight-engine.js→ 多信号融合规则引擎
 ├── highlight-store.js → 高光 JSON 持久化 (每主播每天一个文件)
-├── audio-analyzer.js  → ffmpeg silencedetect 音频分析
+├── audio-analyzer.js  → PCM RMS 音频能量峰值检测 (detectPeaks 纯函数可测)
 ├── clip.js            → 切片核心：pickSourceFiles / clipHighlight / autoClipAfterStream
 ├── lifecycle.js       → 停录收尾统一流程：finalizeStreamer / cleanupAllRecordings
 └── utils.js           → localDate / mergeDirContents / isPathInside
@@ -36,19 +36,21 @@ test-danmaku-rest.js   → REST API 测试工具
 test/                  → node:test 单测 (npm test)
 ```
 
-## 高光引擎 (highlight-engine.js)
+## 高光引擎 (highlight-engine.js, v3)
 
-多信号融合，规则优先级从高到低：
+多信号融合评分，权重：情绪 0.37 / 一致性 0.32 / 加速度 0.16 / z-score 0.15（和=1），观众数涌入额外 +0.1。阈值 0.3，触发间隔 10min，冷却 3min。
 
-| 规则 | 触发条件 | 窗口 | 分数 |
-|------|---------|------|------|
-| Rule 3 超级弹幕高峰 | danmaku z-score > 5σ | 前后各 5min | min(1, dZ/10) |
-| Rule 4 大航海 | 总督(¥19998)/提督(¥1998) | 前后各 5min | min(1, rmb/20000) |
-| Rule 1 弹幕+礼物 | z > 3σ + 10s 礼物 > ¥100 | 前后各 5min | dScore×0.5 + giftScore×0.5 |
-| Rule 2 弹幕+关键词 | z > 3σ + 关键词 > 10 条或占比 > 30% | 前后各 5min | dScore×0.5 + kwScore×0.5 |
-| Rule 5 音频高峰 | post-hoc 匹配或独立创建 | 前后各 5min | 0.3 + 匹配加分 |
+v3 关键机制：
+- **基线门控**：基线样本 < 30 时 z 因子不参与（防开播初期误报）
+- **刷屏限幅**：单 uid 每秒最多计 3 条
+- **绝对量下限**：cScore 需 ≥3 个不同用户且分母下限 10；aScore 除数下限 8
+- **短词保护**：情绪词典 ≤2 字的词只在短弹幕中匹配（"草" 不命中 "草莓"）
+- **观众数信号**：`feedViewerCount`（poller 30s 喂一次），60s 涨 50% → 满分
+- **峰值中心**：窗口中心取最近 15s 弹幕最多的一秒，而非过阈值当下
+- **音频 attach**：音频峰与高光按峰值中心 ±60s 比较（跨分片用 segments.json 换算墙钟）
+- **关键词可配置**：`config.json` 的 `keywordPatterns`（正则字符串数组），主播级可覆盖
 
-关键常量：`CLIP_BEFORE_S=300` `CLIP_AFTER_S=300` `MIN_HIGHLIGHT_INTERVAL_S=600`
+关键常量：`CLIP_BEFORE_S=300` `CLIP_AFTER_S=300` `MIN_HIGHLIGHT_INTERVAL_S=600` `MIN_BASELINE_SAMPLES=30` `UID_CAP_PER_SEC=3`
 
 ## 弹幕协议 (danmaku-parser.js)
 
@@ -94,15 +96,14 @@ B站 WebSocket 二进制协议：
 10. **B站 brotli v3 负载含嵌套二进制头** — 不能当纯 JSON 解析。用 `parseNestedPackets`
 11. **`toISOString().slice(0,10)` 是 UTC 日期** — 北京时间早 8 点前"今天"是昨天，高光会归错日期文件。一律用 `lib/utils.js` 的 `localDate()`（前端用 `todayStr()`）
 12. **API 的 filePath 必须校验在 savePath 之内** — CORS 已收紧为本机来源，但路径校验是最后防线，加新端点时用 `pathAllowed()`
+13. **ffmpeg `-y` 是覆盖不是追加** — 重连"复用"同一文件路径会截断已录内容。重连必须录新分片文件，高光剪切靠 `segments.json` 分片表做墙钟映射（高光带 `peakTs`；音频高光带 `sourceFile`，其偏移是文件内偏移）
 
 ## 未来改进方向 (brainstorm 过，未实现)
 
 - **分数区分度**: 当前所有高光 score 0.6，改用弹幕速率×z-score 乘积拉开差距
-- **绝对量阈值**: 弹幕 < 5条/5s 不触发，过滤低活跃噪音
-- **加速度因子**: 弹幕从 0→8 比 5→8 更有价值
-- **自适应基线**: 按主播历史平均值而非 60s 窗口计算 z-score
-- **观众数信号**: `feedViewerCount` 是空函数，观众涌入是高能指标
 - **合并相邻高光**: 30s 内两个高峰合并而不是跳过
+- **帧级精确切片**: 当前 -c copy 切点对齐关键帧（差几秒），精确切需边界重编码（慢，不值得）
+- **短片段模式**: 现在固定 ±5min 窗口，可改为按高光类型动态窗口（1-2min）
 
 ## 常用命令
 
